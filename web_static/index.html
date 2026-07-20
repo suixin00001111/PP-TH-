@@ -1,37 +1,72 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PayPal 泰国全协议 · 本地纯 HTTP</title>
+  <title>PP-TH · 泰国全协议控制台</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Orbitron:wght@600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="bg-glow" aria-hidden="true"></div>
+  <div class="scanlines" aria-hidden="true"></div>
+
   <div class="shell">
     <header class="hero">
-      <div>
-        <p class="eyebrow">Public Web Console</p>
-        <h1>PayPal 泰国全协议 · 本地纯 HTTP</h1>
-        <p class="subtitle">泰国 TH 本地全协议源码包（非远端 pay.153 部署）。填写 BA Token + 泰国手机号；OTP 在页面输入。</p>
+      <div class="hero-main">
+        <div class="brand-row">
+          <span class="logo-mark" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+              <path d="M4 8L14 3L24 8V20L14 25L4 20V8Z" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M14 12V18M11 15H17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <p class="eyebrow">PP-TH // PROTOCOL CONSOLE</p>
+        </div>
+        <h1>PayPal 泰国全协议</h1>
+        <p class="subtitle">本地纯 HTTP 状态机 · TH 家宽出口 · OTP 页面交互 · 非远端 job 部署</p>
+        <div class="meta-chips" aria-hidden="true">
+          <span class="chip">PHASE 0-4</span>
+          <span class="chip">BA → EC → OTP</span>
+          <span class="chip">MERCHANT B/C</span>
+        </div>
       </div>
-      <div class="status-pill" id="serverStatus">连接中…</div>
+      <div class="hero-side">
+        <button type="button" id="themeToggle" class="theme-toggle" aria-label="切换明暗主题" title="切换明暗主题">
+          <span class="theme-icon theme-icon-sun" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          </span>
+          <span class="theme-icon theme-icon-moon" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"/></svg>
+          </span>
+          <span class="theme-label" id="themeLabel">深色</span>
+        </button>
+        <div class="status-pill" id="serverStatus" role="status">连接中…</div>
+      </div>
     </header>
 
     <main class="grid">
-
       <section class="card form-card">
+        <div class="card-corner tl" aria-hidden="true"></div>
+        <div class="card-corner br" aria-hidden="true"></div>
         <div class="section-title">
-          <h2>启动新任务</h2>
-          <span>后台自动生成资料</span>
+          <div>
+            <p class="sec-kicker">MODULE 01</p>
+            <h2>启动新任务</h2>
+          </div>
+          <span class="sec-hint">后台自动生成资料</span>
         </div>
         <form id="runForm" autocomplete="off">
           <label>
             <span>BA Token</span>
-            <input id="baToken" name="baToken" required placeholder="BA-xxxxxxxxxxxxxxxxx" />
+            <input id="baToken" name="baToken" required placeholder="BA-xxxxxxxxxxxxxxxxx" spellcheck="false" />
           </label>
           <label>
             <span>手机号</span>
-            <input id="phone" name="phone" required placeholder="+66812345678" />
+            <input id="phone" name="phone" required placeholder="+66812345678" inputmode="tel" />
           </label>
           <div class="form-row">
             <label>
@@ -44,27 +79,38 @@
             </label>
             <label class="check-row">
               <input id="proxyEnabled" name="proxyEnabled" type="checkbox" />
-              <span>启用 1024proxy 泰国动态代理</span>
+              <span>启用家宽代理</span>
             </label>
           </div>
-          <button id="startBtn" class="primary" type="submit">开始执行</button>
+          <button id="startBtn" class="primary" type="submit">
+            <span class="btn-glow" aria-hidden="true"></span>
+            <span>开始执行</span>
+          </button>
         </form>
-        <p class="hint">任务执行到短信验证时会暂停等待输入；代理开关按每个任务生效，开启后会从 1024proxy 池中随机选择一个动态节点。</p>
+        <p class="hint">短信验证阶段会暂停等待输入。代理按任务生效；开启后从配置的家宽代理池选取节点。</p>
       </section>
 
       <section class="card jobs-card">
+        <div class="card-corner tl" aria-hidden="true"></div>
+        <div class="card-corner br" aria-hidden="true"></div>
         <div class="section-title">
-          <h2>任务列表</h2>
+          <div>
+            <p class="sec-kicker">MODULE 02</p>
+            <h2>任务列表</h2>
+          </div>
           <button id="refreshJobs" class="ghost" type="button">刷新</button>
         </div>
         <div id="jobsList" class="jobs-list empty">暂无任务</div>
       </section>
 
       <section class="card current-card span-2">
+        <div class="card-corner tl" aria-hidden="true"></div>
+        <div class="card-corner br" aria-hidden="true"></div>
         <div class="section-title">
           <div>
+            <p class="sec-kicker">MODULE 03</p>
             <h2>当前任务</h2>
-            <span id="currentMeta">未选择任务</span>
+            <span id="currentMeta" class="sec-hint">未选择任务</span>
           </div>
           <div class="toolbar">
             <button id="copyResult" class="ghost" type="button" disabled>复制结果</button>
@@ -72,7 +118,7 @@
           </div>
         </div>
 
-        <div id="currentEmpty" class="empty-state">启动或选择一个任务后，这里会显示进度、验证码输入框、生成资料和执行结果。</div>
+        <div id="currentEmpty" class="empty-state">启动或选择一个任务后，这里会显示进度、验证码输入、生成资料与执行结果。</div>
 
         <div id="currentBody" class="current-body hidden">
           <div class="progress-line">
@@ -113,9 +159,15 @@
         </div>
       </section>
     </main>
+
+    <footer class="foot">
+      <span>PP-TH LOCAL CONSOLE</span>
+      <span class="dot" aria-hidden="true"></span>
+      <span>LOGIC UNCHANGED · UI RESKIN</span>
+    </footer>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>

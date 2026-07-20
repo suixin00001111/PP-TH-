@@ -1,3 +1,4 @@
+const THEME_KEY = "pp-th-theme";
 const $ = (sel) => document.querySelector(sel);
 const state = {
   currentJobId: localStorage.getItem("paypal-web-current-job") || "",
@@ -40,6 +41,29 @@ function toast(message) {
   el._timer = setTimeout(() => el.classList.add("hidden"), 2600);
 }
 
+function applyTheme(theme) {
+  const next = theme === "light" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem(THEME_KEY, next);
+  const label = $("#themeLabel");
+  if (label) label.textContent = next === "light" ? "浅色" : "深色";
+}
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  if (saved === "light" || saved === "dark") {
+    applyTheme(saved);
+    return;
+  }
+  const prefersLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+  applyTheme(prefersLight ? "light" : "dark");
+}
+
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute("data-theme") || "dark";
+  applyTheme(cur === "dark" ? "light" : "dark");
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -54,7 +78,7 @@ async function api(path, options = {}) {
 
 function setServer(ok) {
   const el = $("#serverStatus");
-  el.textContent = ok ? "已连接" : "连接失败";
+  el.textContent = ok ? "ONLINE · 已连接" : "OFFLINE · 连接失败";
   el.classList.toggle("ok", ok);
   el.classList.toggle("bad", !ok);
 }
@@ -159,7 +183,9 @@ async function startJob(evt) {
   evt.preventDefault();
   const btn = $("#startBtn");
   btn.disabled = true;
-  btn.textContent = "启动中…";
+  const label = btn.querySelector("span:not(.btn-glow)") || btn;
+  const prev = label.textContent;
+  label.textContent = "启动中…";
   try {
     const data = await api("/api/jobs", {
       method: "POST",
@@ -177,7 +203,7 @@ async function startJob(evt) {
     toast(err.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = "开始执行";
+    label.textContent = "开始执行";
   }
 }
 
@@ -216,8 +242,11 @@ function bind() {
   $("#refreshJobs").addEventListener("click", refreshJobs);
   $("#copyResult").addEventListener("click", copyResult);
   $("#clearCurrent").addEventListener("click", () => selectJob(""));
+  const themeBtn = $("#themeToggle");
+  if (themeBtn) themeBtn.addEventListener("click", toggleTheme);
 }
 
+initTheme();
 bind();
 health();
 refreshJobs().then(() => pollCurrent(true));
