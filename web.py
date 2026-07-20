@@ -533,7 +533,7 @@ class WebPayPalFlow(PayPalFlow):
                 logger.error("Failed to initiate OTP for {}: {}", self._masked_phone(), e)
                 while True:
                     value = self._prompt_operator(
-                        "发送验证码失败。请输入新的手机号重新发送（如 +66812345678）；输入 q 退出。"
+                        f"发送验证码失败。请输入新的手机号重新发送（如 {get_region(self.job.country).phone_placeholder}）；输入 q 退出。"
                     )
                     if value.lower() in {"q", "quit", "exit"}:
                         raise RuntimeError("OTP confirmation cancelled by user") from e
@@ -548,7 +548,7 @@ class WebPayPalFlow(PayPalFlow):
 
             while True:
                 value = self._prompt_operator(
-                    "请输入6位短信验证码；如需换号，输入新手机号（如 +668… / +8190… 或 phone:+…）；输入 q 退出。"
+                    f"请输入6位短信验证码；如需换号，输入新手机号（如 {get_region(self.job.country).phone_placeholder}）；输入 q 退出。"
                 )
 
                 if value.lower() in {"q", "quit", "exit"}:

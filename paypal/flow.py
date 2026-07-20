@@ -28,6 +28,7 @@ from paypal.oaipy_data import (
 from paypal.session import PayPalSession, sanitize_for_log
 from paypal.proxy import build_proxy_config, ProxyConfig
 from paypal.regions import get_region, normalize_phone
+from paypal.protocol import build_protocol, format_billing_line1, format_billing_line2
 from paypal.fingerprint import (
     build_fn_sync_data,
     build_signup_fn_sync_data,
@@ -87,15 +88,25 @@ class PayPalFlow:
             enabled=proxy_enabled,
             index=proxy_index,
         )
-        region = get_region(self.address.country)
-        self.state = SessionState(ba_token=ba_token, region=region.code)
+        # Bind country protocol context (TH is reference machine; not TH constants).
+        self.protocol = build_protocol(self.address.country)
+        self.address.country = self.protocol.code
+        self.state = SessionState(ba_token=ba_token, region=self.protocol.code)
         self._update_user_phone(self.user.phone)
         self.session = PayPalSession(
             self.state,
             proxy_url=self.proxy_config.url,
             proxy_label=self.proxy_config.label,
-            country=region.code,
-            locale=region.locale_bcp47,
+            country=self.protocol.code,
+            locale=self.protocol.locale_bcp47,
+        )
+        logger.info(
+            "Protocol context: {} ({}) lang={} locale={} phone_cc={}",
+            self.protocol.code,
+            self.protocol.name_zh,
+            self.protocol.lang,
+            self.protocol.locale_tag,
+            self.protocol.phone_cc,
         )
 
     def close(self):
@@ -107,7 +118,12 @@ class PayPalFlow:
 
     @property
     def lang(self) -> str:
-        return self.region_profile.lang
+        return getattr(self, "protocol", None).lang if getattr(self, "protocol", None) else self.region_profile.lang
+
+    def _ensure_protocol(self):
+        if not getattr(self, "protocol", None):
+            self.protocol = build_protocol(self.address.country)
+        return self.protocol
 
     @staticmethod
     def _is_generic_error_response(resp) -> bool:
@@ -275,12 +291,13 @@ class PayPalFlow:
                 time.sleep(delay)
                 # Recreate session with fresh proxy connection (may get different exit IP)
                 self.session.close()
+                proto = self._ensure_protocol()
                 self.session = PayPalSession(
                     self.state,
                     proxy_url=self.proxy_config.url,
                     proxy_label=self.proxy_config.label,
-                    country=self.address.country,
-                    locale=get_region(self.address.country).locale_bcp47,
+                    country=proto.code,
+                    locale=proto.locale_bcp47,
                 )
 
             # First GET - may return 403 with DataDome challenge or 302 redirect
@@ -375,8 +392,11 @@ class PayPalFlow:
         return {}
 
     @staticmethod
-    def _extract_content_identifier(html: str, country: str = "TH", lang: str = "th") -> str:
+    def _extract_content_identifier(html: str, country: str = "TH", lang: str = "") -> str:
         """Extract or build the dynamic signup terms contentIdentifier."""
+        if not lang:
+            from paypal.regions import get_region
+            lang = get_region(country).lang
         for pattern in (
             r'"contentIdentifier"\s*:\s*"([^"]*signupTerms[^"]*)"',
             r'\\"contentIdentifier\\"\s*:\s*\\"([^"\\]*signupTerms[^"\\]*)\\"',
@@ -395,8 +415,8 @@ class PayPalFlow:
         params.extend([
             ("ul", "1"),
             ("modxo_redirect_reason", "guest_user"),
-            ("locale.x", self.region_profile.locale_tag),
-            ("country.x", self.address.country.upper()),
+            ("locale.x", self._ensure_protocol().locale_x),
+            ("country.x", self._ensure_protocol().country_x),
             ("ba_token", self.ba_token),
             ("token", self.state.ec_token),
             ("rcache", "1"),
@@ -645,7 +665,7 @@ class PayPalFlow:
                 while True:
                     value = input(
                         "\n>>> 发送验证码失败。请输入新的手机号重新发送"
-                        "（如 +66812345678）；输入 q 退出: "
+                        f"（如 {self._ensure_protocol().phone_placeholder}）；输入 q 退出: "
                     ).strip()
                     if value.lower() in {"q", "quit", "exit"}:
                         raise RuntimeError("OTP confirmation cancelled by user") from e
@@ -660,7 +680,7 @@ class PayPalFlow:
             while True:
                 value = input(
                     "\n>>> 输入6位短信验证码；如需换号，直接输入新手机号"
-                    "（如 +66812345678 或 phone:+66812345678）；输入 q 退出: "
+                    f"（如 {self._ensure_protocol().phone_placeholder} 或 phone:{self._ensure_protocol().phone_placeholder}）；输入 q 退出: "
                 ).strip()
 
                 if value.lower() in {"q", "quit", "exit"}:
@@ -712,7 +732,7 @@ class PayPalFlow:
                 "type": card_type,
                 "productClass": self.card.card_type,
             },
-            "country": self.address.country,
+            "country": self._ensure_protocol().code,
             "email": self.user.email,
             "firstName": self.user.first_name,
             "lastName": self.user.last_name,
@@ -725,15 +745,23 @@ class PayPalFlow:
             "token": token,
             "billingAddress": {
                 "postalCode": self.address.postal_code,
-                "line1": f"{self.address.street}, {self.address.house_number}",
-                "line2": self.address.district,
+                "line1": format_billing_line1(
+                    self._ensure_protocol().address_style,
+                    self.address.street,
+                    self.address.house_number,
+                    self.address.district,
+                ),
+                "line2": format_billing_line2(
+                    self._ensure_protocol().address_style,
+                    self.address.district,
+                ),
                 "city": self.address.city,
                 "state": self.address.state,
                 "accountQuality": {
                     "autoCompleteType": "ANS",
                     "isUserModified": True,
                 },
-                "country": self.address.country,
+                "country": self._ensure_protocol().code,
                 "familyName": self.user.last_name,
                 "givenName": self.user.first_name,
             },
@@ -746,7 +774,7 @@ class PayPalFlow:
                     "autoCompleteType": "MANUAL",
                     "isUserModified": False,
                 },
-                "country": self.address.country,
+                "country": self._ensure_protocol().code,
                 "familyName": self.user.last_name,
                 "givenName": self.user.first_name,
             },
@@ -762,8 +790,8 @@ class PayPalFlow:
 
 
     def _identity_document_payload(self):
-        """Build identityDocument for SignUpNewMember (region-aware)."""
-        region = self.region_profile
+        """Build identityDocument for SignUpNewMember (country protocol)."""
+        region = self._ensure_protocol()
         if not region.send_identity_document:
             return None
         if region.identity_type == "CPF":
@@ -1042,7 +1070,7 @@ class PayPalFlow:
         send_tealeaf_data(self.session, page_url)
 
         # Analytics
-        send_analytics_ts(self.session, "main:xo:modxo:login", self.ba_token, country=self.region_profile.code)
+        send_analytics_ts(self.session, "main:xo:modxo:login", self.ba_token, country=self._ensure_protocol().code)
         send_observability_emit(self.session, self.ba_token)
 
         logger.info("Risk control signals sent")
@@ -1064,7 +1092,7 @@ class PayPalFlow:
         pay_url = (
             f"https://www.paypal.com/pay/?ssrt={self.state.ssrt}"
             f"&token={self.ba_token}&ul=1&ctxId={self.state.ctx_id}"
-            f"&country.x={self.address.country}"
+            f"&country.x={self._ensure_protocol().country_x}"
         )
         try:
             if not self.state.show_create_account_action_id or not self.state.create_user_action_id:
@@ -1206,14 +1234,15 @@ class PayPalFlow:
             if content_hash:
                 self.state.content_hash = content_hash
                 logger.info(f"Content hash: {self.state.content_hash}")
+            proto = self._ensure_protocol()
             content_identifier = self._extract_content_identifier(
                 signup_resp.text,
-                self.address.country,
-                "th",
+                proto.code,
+                proto.content_lang,
             )
             if content_hash and content_identifier.endswith(":compliance.signupTerms") and content_hash not in content_identifier:
-                content_identifier = f"{self.address.country}:{self.lang}:{content_hash}:compliance.signupTerms"
-            elif content_identifier == f"{self.address.country}:{self.lang}:compliance.signupTerms":
+                content_identifier = f"{proto.code}:{proto.content_lang}:{content_hash}:compliance.signupTerms"
+            elif content_identifier == f"{proto.code}:{proto.content_lang}:compliance.signupTerms":
                 raise RuntimeError(
                     "Phase 2 checkout signup: dynamic signup terms identifier is missing"
                 )
@@ -1241,8 +1270,8 @@ class PayPalFlow:
                     "WEASLEY_PREPARE_BILLING_PAGE_FPTI",
                     "weasley_payment_request_api_available",
                 ],
-                country=self.address.country,
-                lang=self.lang,
+                country=self._ensure_protocol().code,
+                lang=self._ensure_protocol().lang,
             )
             send_device_fingerprint(
                 self.session,
@@ -1375,7 +1404,7 @@ class PayPalFlow:
             self.ba_token,
             ec_token=self.state.ec_token,
             user_id=self.state.user_id,
-            country=self.region_profile.code,
+            country=self._ensure_protocol().code,
         )
 
     def _phase4_authorize(self) -> dict:
@@ -1389,7 +1418,7 @@ class PayPalFlow:
         hermes_base_url = (
             f"https://www.paypal.com/webapps/hermes?"
             f"ssrt={self.state.ssrt}&ul=1&modxo_redirect_reason=guest_user"
-            f"&locale.x={self.region_profile.locale_tag}&country.x={self.region_profile.code}"
+            f"&locale.x={self._ensure_protocol().locale_x}&country.x={self._ensure_protocol().country_x}"
             f"&ba_token={self.ba_token}&token={self.state.ec_token}"
             f"&rcache=1&cookieBannerVariant=hidden&fromSignupLite=true"
             f"&fallback=1&reason=Q0FSRF9HRU5FUklDX0VSUk9S"
@@ -1397,7 +1426,7 @@ class PayPalFlow:
         hermes_contingency_url = (
             f"https://www.paypal.com/webapps/hermes?"
             f"ssrt={self.state.ssrt}&ul=1&modxo_redirect_reason=guest_user"
-            f"&locale.x={self.region_profile.locale_tag}&country.x={self.region_profile.code}"
+            f"&locale.x={self._ensure_protocol().locale_x}&country.x={self._ensure_protocol().country_x}"
             f"&ba_token={self.ba_token}&token={self.state.ec_token}"
             f"&rcache=1&cookieBannerVariant=hidden&fromSignupLite=true"
             f"&addFIContingency=noretry&redirectToHermes=true"
@@ -1581,7 +1610,7 @@ class PayPalFlow:
                 ec_token=self.state.ec_token,
                 user_id=self.state.user_id,
                 event="cl",
-                country=self.region_profile.code,
+                country=self._ensure_protocol().code,
             )
 
             return self._attach_b_layer({
@@ -1623,8 +1652,8 @@ class PayPalFlow:
             result["session_cookies"] = self._session_cookie_snapshot()
             result["b_layer"] = build_b_layer_evidence(result)
             result["protocol_mode"] = "http_only_full_protocol"
-            result["region"] = get_region(self.address.country).code
-            result["protocol"] = get_region(self.address.country).protocol_summary()
+            result["region"] = self._ensure_protocol().code
+            result["protocol"] = self._ensure_protocol().summary()
         except Exception as exc:
             result.setdefault("b_layer_error", str(exc))
         return result

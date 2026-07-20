@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 from paypal.flow import PayPalFlow
 from paypal.models import BillingAddress, CardInfo, SessionState, UserInfo
 from paypal.proxy import ProxyConfig
+from paypal.protocol import build_protocol
 
 
 EC_TOKEN = "EC-ABC123456789"
@@ -99,6 +100,7 @@ def make_flow(session, *, action_ids=False):
     )
     flow.session = session
     flow.proxy_config = ProxyConfig(enabled=False)
+    flow.protocol = build_protocol(flow.address.country or "TH")
     return flow
 
 
