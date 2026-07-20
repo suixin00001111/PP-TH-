@@ -9,7 +9,7 @@ from paypal.models import SessionState
 from config import USER_AGENT
 
 
-_LOCALE_BY_REGION = {"TH": "th-TH", "ID": "id-ID"}
+_LOCALE_BY_REGION = {'TH': 'th-TH', 'JP': 'ja-JP', 'US': 'en-US', 'GB': 'en-GB', 'BR': 'pt-BR', 'MX': 'es-MX', 'ID': 'id-ID', 'MY': 'ms-MY', 'SG': 'en-SG', 'PH': 'en-PH', 'VN': 'vi-VN', 'KR': 'ko-KR', 'HK': 'zh-HK', 'TW': 'zh-TW', 'CN': 'zh-CN', 'AU': 'en-AU', 'NZ': 'en-NZ', 'CA': 'en-CA', 'DE': 'de-DE', 'FR': 'fr-FR', 'ES': 'es-ES', 'IT': 'it-IT', 'NL': 'nl-NL', 'SE': 'sv-SE', 'PL': 'pl-PL', 'PT': 'pt-PT', 'IE': 'en-IE', 'CH': 'de-CH', 'AT': 'de-AT', 'BE': 'fr-BE', 'DK': 'da-DK', 'NO': 'nb-NO', 'FI': 'fi-FI', 'IN': 'en-IN', 'AE': 'ar-AE', 'SA': 'ar-SA', 'IL': 'he-IL', 'TR': 'tr-TR', 'RU': 'ru-RU', 'ZA': 'en-ZA', 'AR': 'es-AR', 'CL': 'es-CL', 'CO': 'es-CO', 'PE': 'es-PE'}
 
 # curl_cffi needs CA cert at an ASCII-only path on Windows
 _CURL_CA_BUNDLE = os.environ.get("CURL_CA_BUNDLE", "")

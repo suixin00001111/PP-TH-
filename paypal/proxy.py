@@ -300,11 +300,22 @@ def choose_proxy_entry(pool: Iterable[str] | None = None, index: int | None = No
     return ProxyEntry.parse(raw)
 
 
-def build_proxy_config(enabled: bool | None = None, index: int | None = None) -> ProxyConfig:
+def build_proxy_config(
+    enabled: bool | None = None,
+    index: int | None = None,
+    raw: str | None = None,
+) -> ProxyConfig:
     """Return a selected proxy config.
 
     enabled=None means use config/env default.  If disabled, no proxy is selected.
+    raw: optional user-provided proxy string (host:port:user:pass / URL forms).
+         When non-empty, it always wins over the configured pool.
     """
+    raw_value = (raw or "").strip()
+    if raw_value:
+        # Explicit user/API proxy always enables and does not touch server pool secrets.
+        return ProxyConfig(enabled=True, entry=ProxyEntry.parse(raw_value))
+
     if enabled is None:
         should_enable = parse_bool(os.getenv("PAYPAL_PROXY_ENABLED"), PROXY_ENABLED)
     else:

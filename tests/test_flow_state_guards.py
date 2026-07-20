@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 from paypal.flow import PayPalFlow
 from paypal.models import BillingAddress, CardInfo, SessionState, UserInfo
+from paypal.proxy import ProxyConfig
 
 
 EC_TOKEN = "EC-ABC123456789"
@@ -60,6 +61,9 @@ class FakeSession:
             return self.checkout_result
         return {"data": {}}
 
+    def close(self):
+        return None
+
 
 def make_flow(session, *, action_ids=False):
     flow = PayPalFlow.__new__(PayPalFlow)
@@ -83,6 +87,7 @@ def make_flow(session, *, action_ids=False):
         city="Sao Paulo",
         state="SP",
         postal_code="01310-100",
+        country="TH",
     )
     flow.max_card_attempts = 1
     flow.state = SessionState(
@@ -93,6 +98,7 @@ def make_flow(session, *, action_ids=False):
         create_user_action_id="create-action" if action_ids else "",
     )
     flow.session = session
+    flow.proxy_config = ProxyConfig(enabled=False)
     return flow
 
 
@@ -110,12 +116,13 @@ def patched_signals():
 class FlowStateGuardTests(unittest.TestCase):
     def test_phase0_datadome_fails_without_empty_token_post(self):
         session = FakeSession(
-            gets=[FakeResponse(status_code=403, text="DataDome challenge")]
+            gets=[FakeResponse(status_code=403, text="DataDome challenge") for _ in range(4)]
         )
         flow = make_flow(session)
 
-        with self.assertRaisesRegex(RuntimeError, "DataDome challenge"):
-            flow._phase0_initial_load()
+        with patch("paypal.flow.PayPalSession", return_value=session), patch("paypal.flow.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "DataDome challenge"):
+                flow._phase0_initial_load()
 
         self.assertEqual(session.post_calls, [])
 

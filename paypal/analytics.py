@@ -29,13 +29,15 @@ def send_xo_logger(session, event_data: dict):
 
 def send_analytics_ts(session, page_name: str, ba_token: str,
                       ec_token: str = "", user_id: str = "",
-                      event: str = "im"):
+                      event: str = "im", country: str = "TH"):
     """Send PayPal Analytics tracking pixel (t.paypal.com/ts)."""
+    from paypal.regions import get_region
+    region = get_region(country)
     ts = int(time.time() * 1000)
     params = {
         "v": "1.15.0",
         "t": str(ts),
-        "g": "420",  # Thailand UTC+7 = +420 minutes
+        "g": str(region.analytics_offset_min),
         "pgrp": "main:billing:hagrid",
         "page": page_name,
         "pgtf": "Nodejs",
@@ -49,9 +51,9 @@ def send_analytics_ts(session, page_name: str, ba_token: str,
         "pxpguid": uuid.uuid4().hex,
         "pgst": str(ts - random.randint(2000, 5000)),
         "calc": uuid.uuid4().hex[:13],
-        "rsta": "th_TH",
-        "ccpg": "TH",
-        "cnac": "TH",
+        "rsta": region.locale_tag,
+        "ccpg": region.code,
+        "cnac": region.code,
         "flnm": "Hagrid",
         "e": event,
         "fpti_sdk_name": "pa-js",

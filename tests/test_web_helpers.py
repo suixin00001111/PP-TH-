@@ -10,9 +10,9 @@ class WebHelperTests(unittest.TestCase):
         self.assertEqual(normalize_thailand_phone("66812345678"), "+66812345678")
 
     def test_non_thailand_mobile_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "泰国手机格式"):
+        with self.assertRaises(ValueError):
             normalize_thailand_phone("+5511987654321")
-        with self.assertRaisesRegex(ValueError, "泰国手机格式"):
+        with self.assertRaises(ValueError):
             normalize_thailand_phone("+819012345678")
 
     def test_error_result_is_not_marked_completed(self):

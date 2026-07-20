@@ -11,6 +11,7 @@ from pathlib import Path
 from loguru import logger
 
 from paypal.oaipy_data import generate_user, generate_card, generate_address
+from paypal.regions import normalize_region, list_regions_public
 from paypal.flow import PayPalFlow
 from paypal.proxy import build_proxy_config
 from paypal.session import sanitize_for_log
@@ -28,7 +29,11 @@ def main():
     )
     parser.add_argument(
         "--phone", required=True,
-        help="Phone number with country code (e.g. +66812345678)"
+        help="Phone number with country code (e.g. +66812345678 or +819012345678)"
+    )
+    parser.add_argument(
+        "--country", default="TH",
+        help="Protocol region: TH (Thailand) or JP (Japan)",
     )
     parser.add_argument(
         "--debug", action="store_true",
@@ -70,10 +75,11 @@ def main():
         logger.add(sys.stderr, level="INFO")
 
     proxy_config = build_proxy_config(enabled=args.proxy_enabled, index=args.proxy_index)
+    country = normalize_region(args.country)
 
-    user = generate_user(args.phone)
+    user = generate_user(args.phone, country=country)
     card = generate_card()
-    address = generate_address()
+    address = generate_address(country=country)
 
     logger.info(f"User: {user.first_name} {user.last_name}")
     logger.info("Email: {}", sanitize_for_log({"email": user.email})["email"])
@@ -87,6 +93,7 @@ def main():
     )
     logger.info("Address generated: {}, {}-{}", address.district, address.city, address.state)
     logger.info(f"Proxy: {proxy_config.label}")
+    logger.info(f"Country/Protocol: {country}")
 
     flow = PayPalFlow(
         ba_token=args.ba_token,

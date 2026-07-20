@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PP-TH · 泰国全协议控制台</title>
+  <title>PP Multi · 多国协议控制台</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Orbitron:wght@600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@400;500;600;700&family=Orbitron:wght@600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
@@ -24,10 +24,10 @@
               <path d="M14 12V18M11 15H17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
             </svg>
           </span>
-          <p class="eyebrow">PP-TH // PROTOCOL CONSOLE</p>
+          <p class="eyebrow">PP MULTI // PROTOCOL CONSOLE</p>
         </div>
-        <h1>PayPal 泰国全协议</h1>
-        <p class="subtitle">本地纯 HTTP 状态机 · TH 家宽出口 · OTP 页面交互 · 非远端 job 部署</p>
+        <h1>PayPal 多国协议控制台</h1>
+        <p class="subtitle">本地纯 HTTP · 多国 BA 协议 · 区号手机号 · 可测代理 · OTP 页面交互</p>
         <div class="meta-chips" aria-hidden="true">
           <span class="chip">PHASE 0-4</span>
           <span class="chip">BA → EC → OTP</span>
@@ -65,6 +65,10 @@
             <input id="baToken" name="baToken" required placeholder="BA-xxxxxxxxxxxxxxxxx" spellcheck="false" />
           </label>
           <label>
+            <span>协议国家</span>
+            <select id="countrySelect" name="country" required aria-label="协议国家"></select>
+          </label>
+          <label>
             <span>手机号</span>
             <input id="phone" name="phone" required placeholder="+66812345678" inputmode="tel" />
           </label>
@@ -78,16 +82,27 @@
               <span>显示 DEBUG 日志</span>
             </label>
             <label class="check-row">
-              <input id="proxyEnabled" name="proxyEnabled" type="checkbox" />
-              <span>启用家宽代理</span>
+              <input id="proxyEnabled" name="proxyEnabled" type="checkbox" checked />
+              <span>启用代理</span>
             </label>
+          </div>
+          <div id="proxyPanel" class="proxy-panel">
+            <label>
+              <span>代理信息</span>
+              <input id="proxyRaw" name="proxyRaw" spellcheck="false" autocomplete="off"
+                placeholder="host:port:username:password" />
+            </label>
+            <div class="proxy-actions">
+              <button id="testProxyBtn" class="ghost" type="button">测试代理</button>
+              <span id="proxyTestResult" class="proxy-test-result" aria-live="polite"></span>
+            </div>
           </div>
           <button id="startBtn" class="primary" type="submit">
             <span class="btn-glow" aria-hidden="true"></span>
             <span>开始执行</span>
           </button>
         </form>
-        <p class="hint">短信验证阶段会暂停等待输入。代理按任务生效；开启后从配置的家宽代理池选取节点。</p>
+        <p class="hint">短信验证阶段会暂停等待输入。代理填写后会本地记忆；可先点「测试代理」验证连通。</p>
       </section>
 
       <section class="card jobs-card">

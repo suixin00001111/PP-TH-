@@ -34,9 +34,9 @@ html[data-theme="dark"] {
   --status-ok-bg: rgba(61, 255, 181, 0.1);
   --status-bad-bg: rgba(255, 93, 122, 0.1);
   --status-warn-bg: rgba(255, 209, 102, 0.1);
-  --font-display: "Orbitron", "Space Grotesk", system-ui, sans-serif;
-  --font-body: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", Consolas, monospace;
+  --font-display: "Orbitron", "Fira Sans", system-ui, sans-serif;
+  --font-body: "Fira Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Fira Code", Consolas, monospace;
   --radius: 18px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -728,4 +728,129 @@ button:focus-visible {
     transition: none !important;
   }
   .scanlines { display: none; }
+}
+
+/* Proxy panel */
+.proxy-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+}
+.proxy-panel.hidden { display: none !important; }
+.proxy-formats {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+  font-family: var(--font-mono);
+}
+.proxy-formats code {
+  color: var(--accent);
+  font-size: 10px;
+  word-break: break-all;
+}
+
+
+/* Country protocol switch */
+.country-switch {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.country-btn {
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--input-bg) 90%, transparent);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.country-btn:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+.country-btn.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: var(--glow);
+}
+
+
+/* Form select */
+select {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--input-bg);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 12px 14px;
+  outline: none;
+  font-size: 14px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  min-height: 44px;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% - 3px), calc(100% - 12px) calc(50% - 3px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+select option {
+  background: var(--panel-solid);
+  color: var(--text);
+}
+
+.proxy-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.proxy-test-result {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+.proxy-test-result.ok { color: var(--green); }
+.proxy-test-result.bad { color: var(--red); }
+.proxy-test-result.pending { color: var(--yellow); }
+
+
+/* Multi-country form polish */
+.form-card form label > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.form-card form {
+  gap: 12px;
+}
+select#countrySelect {
+  font-weight: 500;
+}
+.hero .subtitle {
+  max-width: 60ch;
+}
+.proxy-panel {
+  animation: fadeIn .2s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .proxy-panel { animation: none; }
 }

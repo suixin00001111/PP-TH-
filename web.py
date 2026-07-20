@@ -29,6 +29,7 @@ from paypal.flow import PayPalFlow
 from paypal.models import BillingAddress, CardInfo, UserInfo
 from paypal.oaipy_data import generate_address, generate_card, generate_user
 from paypal.proxy import ProxyConfig, build_proxy_config
+from paypal.regions import get_region, normalize_phone, normalize_region, list_regions_public
 from paypal.b_layer_handoff import build_b_layer_evidence, persist_b_layer_evidence
 from paypal.merchant_complete import complete_merchant_chain
 
@@ -81,16 +82,13 @@ def now_ts() -> float:
 
 
 def normalize_thailand_phone(value: str) -> str:
-    digits = "".join(ch for ch in (value or "") if ch.isdigit())
-    if digits.startswith("66"):
-        local = digits[2:]
-    elif digits.startswith("0") and len(digits) == 10:
-        local = digits[1:]
-    else:
-        local = digits
-    if not TH_MOBILE_RE.fullmatch(local):
-        raise ValueError("手机号必须是泰国手机格式：+66 + 9 位号码（6/8/9 开头）")
-    return f"+66{local}"
+    e164, _, _ = normalize_phone("TH", value)
+    return e164
+
+
+def normalize_region_phone(country: str, value: str) -> str:
+    e164, _, _ = normalize_phone(country, value)
+    return e164
 
 
 def mask_middle(value: str, left: int = 6, right: int = 4) -> str:
@@ -247,6 +245,56 @@ def public_generated_payload(user: UserInfo, card: CardInfo, address: BillingAdd
     }
 
 
+def test_proxy_connectivity(proxy_raw: str) -> dict[str, Any]:
+    """Probe outbound proxy with a short HTTPS request. Never logs credentials."""
+    raw = (proxy_raw or "").strip()
+    if not raw:
+        raise ValueError("代理不能为空")
+    proxy_config = build_proxy_config(enabled=True, raw=raw)
+    if not proxy_config.url:
+        raise ValueError("代理解析失败")
+    import time as _time
+    try:
+        import curl_cffi.requests as curl_requests
+    except Exception as exc:
+        raise ValueError(f"代理测试依赖不可用: {exc}") from exc
+
+    started = _time.time()
+    exit_ip = ""
+    status = 0
+    try:
+        with curl_requests.Session(timeout=20, impersonate="chrome131") as client:
+            client.proxies = {"http": proxy_config.url, "https": proxy_config.url}
+            try:
+                ip_resp = client.get("https://api.ipify.org?format=json")
+                if ip_resp.status_code == 200:
+                    try:
+                        exit_ip = str((ip_resp.json() or {}).get("ip") or "").strip()
+                    except Exception:
+                        exit_ip = (ip_resp.text or "").strip()[:64]
+            except Exception:
+                pass
+            resp = client.get("https://www.paypal.com/robots.txt", allow_redirects=True)
+            status = int(getattr(resp, "status_code", 0) or 0)
+            if status < 200 or status >= 500:
+                raise ValueError(f"目标站点返回 HTTP {status}")
+    except Exception as exc:
+        msg = str(exc)
+        if "403" in msg and "proxy" in msg.lower():
+            raise ValueError("代理拒绝连接（403），请检查账号或接入 IP 白名单") from exc
+        raise ValueError(f"代理不可用：{msg}") from exc
+
+    latency_ms = int((_time.time() - started) * 1000)
+    return {
+        "ok": True,
+        "proxy_label": proxy_config.label,
+        "status": status,
+        "exit_ip": exit_ip,
+        "latency_ms": latency_ms,
+    }
+
+
+
 # ----------------------------- job model -----------------------------
 
 
@@ -256,6 +304,7 @@ class WebJob:
     owner_device_id: str
     ba_token: str
     phone: str
+    country: str = "TH"
     debug: bool = False
     max_card_attempts: int = 5
     proxy_enabled: bool = False
@@ -375,6 +424,7 @@ class WebJob:
                 "stage": self.stage,
                 "ba_token": mask_middle(self.ba_token),
                 "phone": mask_phone(self.phone),
+                "country": self.country,
                 "debug": self.debug and ALLOW_DEBUG_LOGS,
                 "max_card_attempts": self.max_card_attempts,
                 "proxy_enabled": self.proxy_enabled,
@@ -498,7 +548,7 @@ class WebPayPalFlow(PayPalFlow):
 
             while True:
                 value = self._prompt_operator(
-                    "请输入6位短信验证码；如需换号，输入新手机号（如 +66812345678 或 phone:+66812345678）；输入 q 退出。"
+                    "请输入6位短信验证码；如需换号，输入新手机号（如 +668… / +8190… 或 phone:+…）；输入 q 退出。"
                 )
 
                 if value.lower() in {"q", "quit", "exit"}:
@@ -566,6 +616,8 @@ def create_job(
     debug: bool,
     max_card_attempts: int,
     proxy_enabled: bool = False,
+    proxy: str = "",
+    country: str = "TH",
 ) -> WebJob:
     ba_token = (ba_token or "").strip()
     if not ba_token:
@@ -574,20 +626,30 @@ def create_job(
         raise ValueError("BA Token 格式不正确")
     if not (phone or "").strip():
         raise ValueError("手机号不能为空")
-    phone = normalize_thailand_phone(phone)
+    country = normalize_region(country)
+    phone = normalize_region_phone(country, phone)
     try:
         max_card_attempts = int(max_card_attempts)
     except Exception as exc:
         raise ValueError("最大换卡次数必须是数字") from exc
     max_card_attempts = max(1, min(max_card_attempts, 20))
     debug = bool(debug) and ALLOW_DEBUG_LOGS
-    proxy_config = build_proxy_config(enabled=bool(proxy_enabled))
+    proxy_raw = (proxy or "").strip()
+    if proxy_raw:
+        # 前端填写的代理优先；解析失败直接报错给用户
+        proxy_config = build_proxy_config(enabled=True, raw=proxy_raw)
+    elif proxy_enabled:
+        # 兼容旧开关：未填串时回退到服务端配置池
+        proxy_config = build_proxy_config(enabled=True)
+    else:
+        proxy_config = build_proxy_config(enabled=False)
 
     job = WebJob(
         id=uuid.uuid4().hex[:12],
         owner_device_id=owner_device_id,
         ba_token=ba_token,
         phone=phone,
+        country=country,
         debug=debug,
         max_card_attempts=max_card_attempts,
         proxy_enabled=proxy_config.enabled,
@@ -628,9 +690,9 @@ def run_job(job: WebJob) -> None:
             proxy_config = job._proxy_config or build_proxy_config(enabled=job.proxy_enabled)
             job.proxy_enabled = proxy_config.enabled
             job.proxy_label = proxy_config.label
-            user = generate_user(job.phone)
+            user = generate_user(job.phone, country=job.country)
             card = generate_card()
-            address = generate_address()
+            address = generate_address(country=job.country)
             job.set_generated(public_generated_payload(user, card, address))
 
             logger.info("Web job started: {}", job.id)
@@ -656,7 +718,7 @@ def run_job(job: WebJob) -> None:
             )
             result = flow.run()
             if isinstance(result, dict):
-                result.setdefault("region", "TH")
+                result.setdefault("region", job.country)
                 job_dir = ROOT / "runtime" / "jobs" / job.id
                 job_dir.mkdir(parents=True, exist_ok=True)
                 if "b_layer" not in result:
@@ -756,6 +818,8 @@ class WebHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
+        if path == "/api/regions":
+            return self.send_json({"regions": list_regions_public(), "default": "TH"})
         if path == "/api/health":
             return self.send_json({"ok": True, "time": now_ts()})
         if path == "/api/jobs":
@@ -788,6 +852,18 @@ class WebHandler(BaseHTTPRequestHandler):
         path = parsed.path
         if not self.validate_post_request():
             return
+        if path == "/api/proxy/test":
+            if not self.check_rate_limit("proxy_test", limit=30, window_seconds=600):
+                return
+            try:
+                data = self.read_json()
+                result = test_proxy_connectivity(
+                    str(data.get("proxy") or data.get("proxy_url") or data.get("proxy_raw") or "")
+                )
+                return self.send_json(result)
+            except Exception as exc:
+                return self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+
         if path == "/api/jobs":
             if not self.check_rate_limit("job_create", limit=20, window_seconds=600):
                 return
@@ -800,6 +876,13 @@ class WebHandler(BaseHTTPRequestHandler):
                     debug=bool(data.get("debug", False)),
                     max_card_attempts=int(data.get("max_card_attempts", 5) or 5),
                     proxy_enabled=bool(data.get("proxy_enabled", False)),
+                    proxy=str(
+                        data.get("proxy")
+                        or data.get("proxy_url")
+                        or data.get("proxy_raw")
+                        or ""
+                    ),
+                    country=str(data.get("country") or data.get("region") or "TH"),
                 )
                 return self.send_json({"job": job.to_dict(include_logs=False)}, status=HTTPStatus.CREATED)
             except Exception as exc:

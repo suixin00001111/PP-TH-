@@ -1,4 +1,4 @@
-# PP-TH · PayPal 泰国（TH）Billing Agreement 纯 HTTP 全协议
+# PP-TH · PayPal 泰国/日本 全协议（TH · JP）
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-private-lightgrey)](#)
@@ -8,6 +8,24 @@
 仓库地址：https://github.com/suixin00001111/PP-TH-
 
 ---
+
+
+## 多国协议（TH / JP）
+
+同一套 BA 状态机，按国家切换资料模板、手机号规则、locale 与 analytics 时区：
+
+| 国家 | 代码 | 手机 | 语言/Locale | 时区 g |
+|------|------|------|-------------|--------|
+| 泰国 | TH | +66 九位（6/8/9） | th / th_TH | 420 |
+| 日本 | JP | +81 十位（70/80/90） | ja / ja_JP | 540 |
+
+Web 界面顶部 **协议国家** 可切换；CLI：
+
+`powershell
+.\.venv\Scripts\python.exe main.py --country JP --ba-token BA-xxx --phone +819012345678 --proxy
+`
+
+创建/jobs 支持字段 country: TH | JP。
 
 ## 功能概览
 
