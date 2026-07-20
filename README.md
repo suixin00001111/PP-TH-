@@ -1,192 +1,126 @@
-# PP-TH · PayPal 泰国/日本 全协议（TH · JP）
+# PP Multi · PayPal 多国 Billing Agreement 纯 HTTP 全协议
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-private-lightgrey)](#)
 
-本地可运行的 **泰国（TH）PayPal Billing Agreement** 全协议实现：纯 HTTP 状态机，不依赖远端 job 平台，也不依赖浏览器自动化。
+本地可运行的 **多国 PayPal Billing Agreement** 实现：纯 HTTP 状态机，不依赖远端 job 平台，也不依赖浏览器自动化。
 
-仓库地址：https://github.com/suixin00001111/PP-TH-
+仓库：https://github.com/suixin00001111/PP-TH-
 
 ---
 
+## 核心概念（务必分清）
 
-## 多国协议
+| 概念 | 含义 |
+|------|------|
+| **泰国 TH** | **流程参考**：Phase 0–4 状态机以泰国实现为蓝本 |
+| **各国协议** | 选中国家后绑定该国 `ProtocolContext`（locale / 区号 / 证件 / 地址样式等） |
+| **生成资料** | 姓名 / 城市 / 街道 / 邮编 / 手机区号 **必须对应该国**，不会把泰国资料填进其它国家 |
 
-## 资料生成（开源对接）
-
-- **协议流程**：泰国（TH）只是纯 HTTP BA **状态机参考实现**；选中某国后绑定该国 `ProtocolContext`（locale / 区号 / 证件 / 地址样式等），**不会**把泰国身份资料填进其它国家任务。
-- **身份资料**：姓名、城市、街道等通过开源库 [Faker](https://github.com/joke2k/faker)（MIT）按国家 locale 生成，例如 `th_TH`、`ja_JP`、`pt_BR`、`de_DE`…
-- **手机号**：按所选国家国际区号规范化；输入框 placeholder 仅为示例，用户填写后显示完整号码。
-- **巴西 BR**：额外生成 CPF 并写入 `identityDocument`；其它国家与参考案一致不强制证件。
-
-（TH / JP）
-
-同一套 BA 状态机，按国家切换资料模板、手机号规则、locale 与 analytics 时区：
-
-| 国家 | 代码 | 手机 | 语言/Locale | 时区 g |
-|------|------|------|-------------|--------|
-| 泰国 | TH | +66 九位（6/8/9） | th / th_TH | 420 |
-| 日本 | JP | +81 十位（70/80/90） | ja / ja_JP | 540 |
-
-Web 界面顶部 **协议国家** 可切换；CLI：
-
-`powershell
-.\.venv\Scripts\python.exe main.py --country JP --ba-token BA-xxx --phone +819012345678 --proxy
-`
-
-创建/jobs 支持字段 country: TH | JP。
-
-## 功能概览
-
-- **A 层（PayPal BA）**
-  - Phase 0：协议页加载 / DataDome 检测
-  - Phase 1：设备指纹 + Tealeaf + analytics
-  - Phase 2：ModXO 建账号 → EC / signup
-  - Phase 3：Initiate2FA → OTP → SignUpNewMember
-  - Phase 4：AuthorizeBilling → `return_url`
-- **B/C 层（商户链）**  
-  `pm-redirects` / `pay.openai` → SetupIntent → `checkout/verify` → ChatGPT 状态确认
-- **本地 Web 控制台**：创建任务、OTP 交互、日志查看
-- **CLI 一键跑流程**
-- **泰国资料模板**：`+66` 手机、泰文/罗马姓名、曼谷等地址；不提交 CPF
+任务启动日志示例：
 
 ```text
-BA approve
-  → Phase 0 协议页 / DataDome
-  → Phase 1 指纹 + Tealeaf + analytics
-  → Phase 2 ModXO create-account → EC / signup
-  → Phase 3 2FA / OTP / 注册
-  → Phase 4 授权 → return_url
-  → 商户链 B/C
+Protocol context: JP (日本) lang=ja locale=ja_JP phone_cc=+81
 ```
 
 ---
 
-## 环境要求
+## 支持的国家（40+）
 
-- Windows / Linux / macOS
-- Python **3.10+**（开发机验证过 3.14）
-- 可用的 **TH 家宽出口代理**（强烈建议）
-- 合法测试用的 `BA-token` 与可收短信的泰国手机号（完整跑通时）
+Web 下拉与 `GET /api/regions` 一致，包括：
+
+`TH JP US GB BR MX ID MY SG PH VN KR HK TW CN AU NZ CA DE FR ES IT NL SE PL PT IE CH AT BE DK NO FI IN AE SA IL TR RU ZA AR CL CO PE`
+
+各国差异：语言/locale、国际区号、分析时区 g=、地址样式；**仅巴西 BR** 生成并提交 **CPF**，其余不强制证件。
+
+---
+
+## 资料生成（开源对接）
+
+- 姓名、城市、街道等通过开源库 [Faker](https://github.com/joke2k/faker)（MIT）按国家 locale 生成（如 `th_TH`、`ja_JP`、`pt_BR`、`de_DE`）
+- 非拉丁脚本经 [Unidecode](https://pypi.org/project/Unidecode/) 转写，便于表单字段
+- `address.country` 与所选协议国家强制一致
+- 手机号输入框 **placeholder 仅为示例**；用户填写后显示完整号码
+
+---
+
+## 功能概览
+
+**A 层（PayPal BA）**：Phase0 协议页 → Phase1 指纹/Tealeaf → Phase2 ModXO/EC → Phase3 OTP → Phase4 授权
+
+**B/C 层**：pm-redirects / pay.openai → SetupIntent → checkout/verify
+
+**控制台**：国家下拉、代理填写与测试、OTP 交互、任务日志、CLI
 
 ---
 
 ## 快速开始
 
-### 1. 克隆
-
 ```bash
 git clone https://github.com/suixin00001111/PP-TH-.git
 cd PP-TH-
-```
-
-### 2. 安装依赖
-
-```powershell
 python -m venv .venv
+```
+
+Windows:
+
+```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-Linux / macOS：
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 3. 配置代理（必做）
-
-**不要把真实代理账号写进 Git。** 推荐环境变量：
-
-```powershell
-$env:PAYPAL_PROXY_ENABLED = "1"
-$env:PAYPAL_USE_SYSTEM_PROXY = "0"
-$env:PAYPAL_PROXY_POOL = "host:port:username:password"
-```
-
-也支持标准 URL：
-
-```text
-http://username:password@host:port
-```
-
-或在 `config.py` 的 `PROXY_POOL` 中本地填写（仅本机，勿提交）。
-
-> 说明：`USE_SYSTEM_PROXY=True` 会走本机系统代理（如 Clash `127.0.0.1:7897`）。  
-> **要走家宽请保持 `False`，并配置 `PROXY_POOL` / 环境变量。**
-
-可选：
-
-```powershell
-$env:STRIPE_PUBLISHABLE_KEY = "pk_live_xxx"   # 商户链 SetupIntent 查询
-```
-
-### 4. 启动 Web 界面
-
-Windows：
-
-```powershell
 .\start.bat
-# 或
-.\.venv\Scripts\python.exe web.py --host 127.0.0.1 --port 8080
+# 或 .\.venv\Scripts\python.exe web.py --host 127.0.0.1 --port 8080
 ```
 
-Linux / macOS：
+打开：http://127.0.0.1:8080
 
-```bash
-./start.sh
-# 或
-python3 web.py --host 127.0.0.1 --port 8080
-```
+依赖：`httpx[http2]`、`loguru`、`requests`、`faker`、`unidecode`。
 
-浏览器打开：**http://127.0.0.1:8080**
+### 代理
 
-### 5. CLI 运行
+推荐在 **Web 填写**（可「测试代理」）。无协议前缀时默认补 `http://`。
+
+不要把真实代理账号提交到 Git。也可用环境变量 `PAYPAL_PROXY_ENABLED` / `PAYPAL_PROXY_POOL` / `PAYPAL_PROXY_URL`。
+
+### CLI
 
 ```powershell
-.\.venv\Scripts\python.exe main.py `
-  --ba-token BA-xxxxxxxxxxxxxxxxx `
-  --phone +66812345678 `
-  --proxy
+.\.venv\Scripts\python.exe main.py --country JP --ba-token BA-xxx --phone +819012345678 --proxy
 ```
-
-常用参数：
 
 | 参数 | 说明 |
 |------|------|
-| `--ba-token` | Billing Agreement token（必填） |
-| `--phone` | 泰国手机号，如 `+668xxxxxxxx`（必填） |
-| `--proxy` / `--no-proxy` | 强制开/关代理 |
-| `--proxy-index` | 代理池下标 |
+| `--ba-token` | BA token（必填） |
+| `--phone` | 带国际区号手机号（必填） |
+| `--country` | 协议国家，默认 `TH` |
+| `--proxy` / `--no-proxy` | 开/关代理 |
 | `--debug` | 调试日志 |
-| `--max-card-attempts` | 绑卡失败重试次数 |
+| `--max-card-attempts` | 绑卡重试次数 |
 
 ---
 
-## Web API（简要）
+## Web API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
-| GET | `/api/jobs` | 当前设备任务列表 |
+| GET | `/api/regions` | 国家列表 |
+| GET | `/api/jobs` | 任务列表 |
 | POST | `/api/jobs` | 创建任务 |
-| GET | `/api/jobs/{id}` | 任务详情 / 日志 |
-| POST | `/api/jobs/{id}/otp` | 提交 OTP / 交互输入 |
+| GET | `/api/jobs/{id}` | 任务详情 |
+| POST | `/api/jobs/{id}/otp` | 提交 OTP |
+| POST | `/api/proxy/test` | 测试代理 |
 
-创建任务 JSON 示例：
+创建任务示例：
 
 ```json
 {
   "ba_token": "BA-xxxxxxxxxxxxxxxxx",
-  "phone": "+66812345678",
+  "phone": "+819012345678",
+  "country": "JP",
   "proxy_enabled": true,
-  "max_card_attempts": 5,
-  "debug": false
+  "proxy": "host:port:username:password",
+  "max_card_attempts": 5
 }
 ```
-
-> 任务按浏览器设备 cookie 隔离，跨浏览器看不到对方任务。
 
 ---
 
@@ -194,41 +128,35 @@ python3 web.py --host 127.0.0.1 --port 8080
 
 ```text
 PP-TH-/
-├── config.py              # 全局配置（代理请用环境变量）
-├── main.py                # CLI 入口
-├── web.py                 # Web UI / API
-├── start.bat / start.sh   # 一键启动
+├── config.py / main.py / web.py / start.bat / start.sh
 ├── requirements.txt
-├── paypal/                # 协议核心
-│   ├── flow.py            # 状态机主流程
-│   ├── session.py         # curl_cffi 会话
-│   ├── proxy.py           # 代理解析（多种格式）
-│   ├── fingerprint.py / tealeaf.py / graphql.py
-│   ├── merchant_complete.py / b_layer_handoff.py
-│   └── oaipy_data.py      # TH 资料 / 卡 / 地址生成
-├── web_static/            # 前端静态资源
-├── tests/                 # 单元测试
-├── PROTOCOL_CHAIN.md      # 协议链路说明
-├── REVERSE_NOTES.md       # 逆向笔记
-└── SANITIZATION.md        # 脱敏约定
+├── paypal/
+│   ├── flow.py          # 状态机 + 各国 ProtocolContext
+│   ├── protocol.py      # 国家协议上下文（TH 为参考衍生）
+│   ├── regions.py       # 国家档案
+│   ├── oaipy_data.py    # Faker 多国资料
+│   ├── session.py / proxy.py / fingerprint.py / tealeaf.py
+│   ├── analytics.py / graphql.py
+│   └── merchant_complete.py / b_layer_handoff.py
+├── web_static/
+├── tests/
+├── PROTOCOL_CHAIN.md / REVERSE_NOTES.md / SANITIZATION.md
+└── README.md
 ```
 
 ---
 
-## 代理格式支持
-
-`paypal/proxy.py` 支持：
+## 代理格式
 
 ```text
 host:port:username:password
-username:password@host:port
-host:port@username:password
-host:port                          # 无认证（如本地 mixed）
+user:pass@host:port
+host:port
 http://user:pass@host:port
 socks5://user:pass@host:port
 ```
 
-注意：`http://host:port:user:pass` **不是**合法 URL，请勿这样写。
+不要写 `http://host:port:user:pass`。
 
 ---
 
@@ -236,47 +164,33 @@ socks5://user:pass@host:port
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m compileall -q paypal tests web.py main.py
 ```
 
----
-
-## 边界与声明
-
-- 纯 HTTP **不能**自动过 DataDome / hCaptcha；命中验证码会明确失败，不会拉起浏览器。
-- ModXO `Next-Action`、EC、signup terms 均为动态状态，不能用死 HAR 常量硬编码。
-- 离线单测只验证状态机与校验逻辑，**不保证** PayPal 线上长期接受。
-- 本仓库不包含真实 BA、手机、代理账号、Cookie、HAR（见 `SANITIZATION.md`）。
-- 仅供授权环境的安全研究 / 协议分析使用，请遵守当地法律与平台条款。
-
----
-
-## 与巴西包差异（摘要）
-
-| 点 | BR | TH（本仓库） |
-|----|----|--------------|
-| 手机 | `+55` | `+66` 九位（6/8/9 开头） |
-| 语言 | `pt-BR` | `th-TH` |
-| 国家码 | `BR` | `TH` |
-| 证件 | CPF 必填 | 不送 CPF |
-| 资料 | 巴西姓名/CEP | 泰国姓名/地址/邮编 |
-| 时区 beacon | UTC-3 | UTC+7 (`g=420`) |
+- 假 BA：Phase 0/1 通常可过；Phase 2 预期因无 EC 失败
+- 完整 OTP 需真实 BA + 该国号码（建议该国出口代理）
 
 ---
 
 ## 常见问题
 
-**Q: 代理 403 `forbidden ip=... not supported`？**  
-A: 家宽服务商拒绝了你的接入公网 IP。请在代理后台加白名单，或使用允许当前 IP 的账号。
+**每个国家是自己的协议吗？**  是。流程架子参考泰国；locale/区号/资料/证件按所选国家绑定。
 
-**Q: 为什么不走 Clash 本地端口？**  
-A: 默认关闭系统代理，确保出口是你配置的 **TH 家宽**，而不是本机 VPN 节点。
+**资料会串成泰国吗？**  不会。`address.country` 与手机区号强制等于所选国；资料来自该国 Faker locale。
 
-**Q: 假 BA 能跑通吗？**  
-A: Phase 0/1 通常可到；Phase 2 需要真实有效 `BA-token` 才能拿到 EC。
+**代理 403？**  接入 IP 白名单或账号问题；可用 Web「测试代理」。
+
+**假 BA？**  一般只到 Phase 0/1。
+
+---
+
+## 边界
+
+- 不能自动过 DataDome / hCaptcha
+- 动态状态不可死 HAR 硬编码
+- 仅供授权研究；仓库不含真实密钥（见 `SANITIZATION.md`）
 
 ---
 
 ## 许可证
 
-私有仓库。未声明开源许可前，请勿二次分发敏感用途的衍生实现。
+私有仓库。
