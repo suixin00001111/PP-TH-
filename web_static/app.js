@@ -1,0 +1,226 @@
+const $ = (sel) => document.querySelector(sel);
+const state = {
+  currentJobId: localStorage.getItem("paypal-web-current-job") || "",
+  pollTimer: null,
+};
+
+function fmtTime(ts) {
+  if (!ts) return "-";
+  return new Date(ts * 1000).toLocaleString();
+}
+
+function fmtDuration(seconds) {
+  seconds = Math.max(0, Math.floor(seconds || 0));
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m < 60) return `${m}m ${s}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m ${s}s`;
+}
+
+function pretty(obj) {
+  if (!obj) return "{}";
+  return JSON.stringify(obj, null, 2);
+}
+
+function esc(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function toast(message) {
+  const el = $("#toast");
+  el.textContent = message;
+  el.classList.remove("hidden");
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.add("hidden"), 2600);
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    ...options,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+function setServer(ok) {
+  const el = $("#serverStatus");
+  el.textContent = ok ? "已连接" : "连接失败";
+  el.classList.toggle("ok", ok);
+  el.classList.toggle("bad", !ok);
+}
+
+async function health() {
+  try {
+    await api("/api/health");
+    setServer(true);
+  } catch (err) {
+    setServer(false);
+  }
+}
+
+async function refreshJobs() {
+  try {
+    const data = await api("/api/jobs");
+    renderJobs(data.jobs || []);
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+function renderJobs(jobs) {
+  const box = $("#jobsList");
+  if (!jobs.length) {
+    box.className = "jobs-list empty";
+    box.textContent = "暂无任务";
+    return;
+  }
+  box.className = "jobs-list";
+  box.innerHTML = jobs.map(job => `
+    <div class="job-item ${job.id === state.currentJobId ? "active" : ""}" data-job-id="${esc(job.id)}">
+      <div class="job-top">
+        <span class="job-id">#${esc(job.id)}</span>
+        <span class="badge ${esc(job.status)}">${esc(job.status)}</span>
+      </div>
+      <div class="job-sub">${esc(job.stage || "")}</div>
+      <div class="job-sub">${esc(job.ba_token || "")} · ${esc(fmtTime(job.created_at))} · ${job.proxy_enabled ? "代理开" : "代理关"}</div>
+    </div>`).join("");
+  box.querySelectorAll(".job-item").forEach(item => {
+    item.addEventListener("click", () => selectJob(item.dataset.jobId));
+  });
+}
+
+function selectJob(jobId) {
+  state.currentJobId = jobId || "";
+  if (jobId) localStorage.setItem("paypal-web-current-job", jobId);
+  else localStorage.removeItem("paypal-web-current-job");
+  refreshJobs();
+  pollCurrent(true);
+}
+
+function renderLogs(logs) {
+  const text = (logs || []).map(line => {
+    const t = new Date((line.time || 0) * 1000).toLocaleTimeString();
+    return `[${t}] ${line.level.padEnd(7)} ${line.message}`;
+  }).join("\n");
+  const box = $("#logsBox");
+  box.textContent = text;
+  if ($("#autoScroll").checked) box.scrollTop = box.scrollHeight;
+}
+
+function renderCurrent(job) {
+  $("#currentEmpty").classList.add("hidden");
+  $("#currentBody").classList.remove("hidden");
+  $("#currentMeta").textContent = `#${job.id} · 创建于 ${fmtTime(job.created_at)} · ${job.proxy_label || "代理关闭"}`;
+  $("#jobStatus").textContent = job.status;
+  $("#jobStage").textContent = job.stage || "";
+  $("#jobDuration").textContent = fmtDuration(job.duration);
+  $("#generatedBox").textContent = pretty(job.generated);
+  $("#resultBox").textContent = pretty(job.result || (job.error ? { error: job.error, traceback: job.traceback } : {}));
+  $("#copyResult").disabled = !(job.result || job.error);
+
+  const otpPanel = $("#otpPanel");
+  otpPanel.classList.toggle("hidden", !job.awaiting_otp);
+  $("#otpPrompt").textContent = job.awaiting_prompt || "请输入短信验证码或新手机号。";
+  if (job.awaiting_otp) $("#otpValue").focus();
+
+  renderLogs(job.logs || []);
+}
+
+async function pollCurrent(force = false) {
+  if (!state.currentJobId) {
+    $("#currentEmpty").classList.remove("hidden");
+    $("#currentBody").classList.add("hidden");
+    $("#currentMeta").textContent = "未选择任务";
+    $("#copyResult").disabled = true;
+    return;
+  }
+  try {
+    const job = await api(`/api/jobs/${state.currentJobId}`);
+    renderCurrent(job);
+    if (force || ["completed", "failed", "awaiting_otp"].includes(job.status)) refreshJobs();
+  } catch (err) {
+    toast(err.message);
+    state.currentJobId = "";
+    localStorage.removeItem("paypal-web-current-job");
+  }
+}
+
+async function startJob(evt) {
+  evt.preventDefault();
+  const btn = $("#startBtn");
+  btn.disabled = true;
+  btn.textContent = "启动中…";
+  try {
+    const data = await api("/api/jobs", {
+      method: "POST",
+      body: JSON.stringify({
+        ba_token: $("#baToken").value,
+        phone: $("#phone").value,
+        max_card_attempts: Number($("#maxCardAttempts").value || 5),
+        debug: $("#debug").checked,
+        proxy_enabled: $("#proxyEnabled").checked,
+      }),
+    });
+    toast("任务已启动");
+    selectJob(data.job.id);
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "开始执行";
+  }
+}
+
+async function submitOtp(evt) {
+  evt.preventDefault();
+  if (!state.currentJobId) return;
+  const value = $("#otpValue").value.trim();
+  if (!value) return toast("请输入验证码或手机号");
+  try {
+    await api(`/api/jobs/${state.currentJobId}/otp`, {
+      method: "POST",
+      body: JSON.stringify({ value }),
+    });
+    $("#otpValue").value = "";
+    toast("已提交");
+    pollCurrent(true);
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+async function copyResult() {
+  if (!state.currentJobId) return;
+  try {
+    const job = await api(`/api/jobs/${state.currentJobId}`);
+    await navigator.clipboard.writeText(pretty(job.result || { error: job.error, traceback: job.traceback }));
+    toast("结果已复制");
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+function bind() {
+  $("#runForm").addEventListener("submit", startJob);
+  $("#otpForm").addEventListener("submit", submitOtp);
+  $("#refreshJobs").addEventListener("click", refreshJobs);
+  $("#copyResult").addEventListener("click", copyResult);
+  $("#clearCurrent").addEventListener("click", () => selectJob(""));
+}
+
+bind();
+health();
+refreshJobs().then(() => pollCurrent(true));
+setInterval(health, 8000);
+setInterval(refreshJobs, 5000);
+state.pollTimer = setInterval(() => pollCurrent(false), 1000);

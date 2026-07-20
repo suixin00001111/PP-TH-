@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+*.zip
+
+.env
+.env.*
+!.env.example
+
+captures/
+browser-artifacts/
+chrome-profile/
+storage/
+work/
+outputs/
+*.har
+*.saz
+*.pcap
+*.pcapng
+
+# runtime artifacts
+b_layer_evidence.json
+merchant_session.json
+**/b_layer_evidence.json
+**/merchant_session.json

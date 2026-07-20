@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PayPal 泰国全协议 · 本地纯 HTTP</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Public Web Console</p>
+        <h1>PayPal 泰国全协议 · 本地纯 HTTP</h1>
+        <p class="subtitle">泰国 TH 本地全协议源码包（非远端 pay.153 部署）。填写 BA Token + 泰国手机号；OTP 在页面输入。</p>
+      </div>
+      <div class="status-pill" id="serverStatus">连接中…</div>
+    </header>
+
+    <main class="grid">
+
+      <section class="card form-card">
+        <div class="section-title">
+          <h2>启动新任务</h2>
+          <span>后台自动生成资料</span>
+        </div>
+        <form id="runForm" autocomplete="off">
+          <label>
+            <span>BA Token</span>
+            <input id="baToken" name="baToken" required placeholder="BA-xxxxxxxxxxxxxxxxx" />
+          </label>
+          <label>
+            <span>手机号</span>
+            <input id="phone" name="phone" required placeholder="+66812345678" />
+          </label>
+          <div class="form-row">
+            <label>
+              <span>最大换卡次数</span>
+              <input id="maxCardAttempts" name="maxCardAttempts" type="number" min="1" max="20" value="5" />
+            </label>
+            <label class="check-row">
+              <input id="debug" name="debug" type="checkbox" />
+              <span>显示 DEBUG 日志</span>
+            </label>
+            <label class="check-row">
+              <input id="proxyEnabled" name="proxyEnabled" type="checkbox" />
+              <span>启用 1024proxy 泰国动态代理</span>
+            </label>
+          </div>
+          <button id="startBtn" class="primary" type="submit">开始执行</button>
+        </form>
+        <p class="hint">任务执行到短信验证时会暂停等待输入；代理开关按每个任务生效，开启后会从 1024proxy 池中随机选择一个动态节点。</p>
+      </section>
+
+      <section class="card jobs-card">
+        <div class="section-title">
+          <h2>任务列表</h2>
+          <button id="refreshJobs" class="ghost" type="button">刷新</button>
+        </div>
+        <div id="jobsList" class="jobs-list empty">暂无任务</div>
+      </section>
+
+      <section class="card current-card span-2">
+        <div class="section-title">
+          <div>
+            <h2>当前任务</h2>
+            <span id="currentMeta">未选择任务</span>
+          </div>
+          <div class="toolbar">
+            <button id="copyResult" class="ghost" type="button" disabled>复制结果</button>
+            <button id="clearCurrent" class="ghost" type="button">清空选择</button>
+          </div>
+        </div>
+
+        <div id="currentEmpty" class="empty-state">启动或选择一个任务后，这里会显示进度、验证码输入框、生成资料和执行结果。</div>
+
+        <div id="currentBody" class="current-body hidden">
+          <div class="progress-line">
+            <div>
+              <div id="jobStatus" class="job-status">queued</div>
+              <div id="jobStage" class="job-stage">排队中</div>
+            </div>
+            <div id="jobDuration" class="duration">0s</div>
+          </div>
+
+          <div id="otpPanel" class="otp-panel hidden">
+            <div>
+              <h3>需要输入验证码 / 新手机号</h3>
+              <p id="otpPrompt"></p>
+            </div>
+            <form id="otpForm" class="otp-form" autocomplete="off">
+              <input id="otpValue" placeholder="6位验证码或新手机号；q 退出" />
+              <button class="primary" type="submit">提交</button>
+            </form>
+          </div>
+
+          <div class="details-grid">
+            <div>
+              <h3>生成资料</h3>
+              <pre id="generatedBox" class="json-box">{}</pre>
+            </div>
+            <div>
+              <h3>结果</h3>
+              <pre id="resultBox" class="json-box">{}</pre>
+            </div>
+          </div>
+
+          <div class="logs-head">
+            <h3>实时日志</h3>
+            <label class="check-row small"><input id="autoScroll" type="checkbox" checked />自动滚动</label>
+          </div>
+          <pre id="logsBox" class="logs-box"></pre>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
