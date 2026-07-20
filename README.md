@@ -10,7 +10,16 @@
 ---
 
 
-## 多国协议（TH / JP）
+## 多国协议
+
+## 资料生成（开源对接）
+
+- **协议流程**：泰国（TH）只是纯 HTTP BA **状态机参考实现**；选中某国后绑定该国 `ProtocolContext`（locale / 区号 / 证件 / 地址样式等），**不会**把泰国身份资料填进其它国家任务。
+- **身份资料**：姓名、城市、街道等通过开源库 [Faker](https://github.com/joke2k/faker)（MIT）按国家 locale 生成，例如 `th_TH`、`ja_JP`、`pt_BR`、`de_DE`…
+- **手机号**：按所选国家国际区号规范化；输入框 placeholder 仅为示例，用户填写后显示完整号码。
+- **巴西 BR**：额外生成 CPF 并写入 `identityDocument`；其它国家与参考案一致不强制证件。
+
+（TH / JP）
 
 同一套 BA 状态机，按国家切换资料模板、手机号规则、locale 与 analytics 时区：
 

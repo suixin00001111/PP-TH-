@@ -1,4 +1,4 @@
-import unittest
+﻿import unittest
 from paypal.oaipy_data import generate_user, generate_address, normalize_thailand_phone
 from paypal.regions import normalize_phone, get_region
 
@@ -13,7 +13,7 @@ class JapanProfileTests(unittest.TestCase):
     def test_generate_address_jp(self):
         addr = generate_address(country="JP")
         self.assertEqual(addr.country, "JP")
-        self.assertTrue(addr.postal_code.isdigit())
+        self.assertTrue(any(ch.isdigit() for ch in addr.postal_code))
 
     def test_jp_phone_normalize(self):
         e164, local, cc = normalize_phone("JP", "09012345678")
