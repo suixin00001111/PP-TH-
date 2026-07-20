@@ -1,13 +1,15 @@
-"""Multi-country protocol profiles for pure-HTTP BA flow.
+"""Per-country protocol profiles for pure-HTTP BA flow.
 
-Protocol mechanics follow the Thailand implementation; each country only
-swaps locale / phone dial code / analytics timezone / profile templates.
+All countries share the Thailand package state machine (Phase 0–4 + merchant chain).
+Selecting a country only switches the regional protocol profile:
+  locale / language / dialing code / analytics timezone / address-name pool /
+  optional identity document (e.g. BR CPF).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import random
-import re
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -18,15 +20,33 @@ class RegionProfile:
     lang: str
     locale_bcp47: str
     locale_tag: str
-    phone_cc: str          # +66
-    phone_cc_digits: str   # 66
+    phone_cc: str
+    phone_cc_digits: str
     analytics_offset_min: int
     phone_placeholder: str
     sample_local: str
     phone_hint: str = ""
+    # Protocol flags (Thailand-base)
+    protocol_base: str = "TH"          # shared state machine
+    require_identity: bool = False
+    identity_type: str | None = None   # e.g. "CPF"
+    send_identity_document: bool = False
 
     def accept_language_header(self) -> str:
         return f"{self.locale_bcp47},{self.lang};q=0.9,en-US;q=0.8,en;q=0.7"
+
+    def protocol_summary(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "name_zh": self.name_zh,
+            "protocol_base": self.protocol_base,
+            "lang": self.lang,
+            "locale": self.locale_bcp47,
+            "locale_tag": self.locale_tag,
+            "phone_cc": self.phone_cc,
+            "analytics_g": self.analytics_offset_min,
+            "identity": self.identity_type if self.send_identity_document else None,
+        }
 
 
 def _row(
@@ -39,6 +59,10 @@ def _row(
     cc: str,
     offset: int,
     sample_local: str,
+    *,
+    require_identity: bool = False,
+    identity_type: str | None = None,
+    send_identity_document: bool = False,
 ) -> RegionProfile:
     return RegionProfile(
         code=code,
@@ -52,16 +76,24 @@ def _row(
         analytics_offset_min=offset,
         phone_placeholder=f"+{cc}{sample_local}",
         sample_local=sample_local,
-        phone_hint=f"请填写带国际区号的号码，例如 +{cc}…",
+        phone_hint=f"示例区号 +{cc}；填写后显示完整手机号",
+        protocol_base="TH",
+        require_identity=require_identity,
+        identity_type=identity_type,
+        send_identity_document=send_identity_document,
     )
 
 
+# PayPal-common markets; state machine = Thailand base
 REGIONS: dict[str, RegionProfile] = {
     "TH": _row("TH", "泰国", "Thailand", "th", "th-TH", "th_TH", "66", 420, "812345678"),
     "JP": _row("JP", "日本", "Japan", "ja", "ja-JP", "ja_JP", "81", 540, "9012345678"),
     "US": _row("US", "美国", "United States", "en", "en-US", "en_US", "1", -300, "2025550123"),
     "GB": _row("GB", "英国", "United Kingdom", "en", "en-GB", "en_GB", "44", 0, "7400123456"),
-    "BR": _row("BR", "巴西", "Brazil", "pt", "pt-BR", "pt_BR", "55", -180, "11987654321"),
+    "BR": _row(
+        "BR", "巴西", "Brazil", "pt", "pt-BR", "pt_BR", "55", -180, "11987654321",
+        require_identity=True, identity_type="CPF", send_identity_document=True,
+    ),
     "MX": _row("MX", "墨西哥", "Mexico", "es", "es-MX", "es_MX", "52", -360, "5512345678"),
     "ID": _row("ID", "印尼", "Indonesia", "id", "id-ID", "id_ID", "62", 420, "81234567890"),
     "MY": _row("MY", "马来西亚", "Malaysia", "ms", "ms-MY", "ms_MY", "60", 480, "123456789"),
@@ -132,10 +164,9 @@ def get_region(code: str | None = None) -> RegionProfile:
 
 
 def normalize_phone(country: str, phone: str = "") -> tuple[str, str, str]:
-    """Return (e164, local, +cc).
+    """(e164, local, +cc). Requires selected country dial code when '+' present.
 
-    Only requires that the number uses the selected country's international
-    dialing code. Local subscriber number is not strictly validated.
+    Placeholder/example only on UI; any local digits are accepted and prefixed.
     """
     region = get_region(country)
     cc = region.phone_cc_digits
@@ -145,39 +176,26 @@ def normalize_phone(country: str, phone: str = "") -> tuple[str, str, str]:
 
     digits = "".join(ch for ch in raw if ch.isdigit())
     if not digits:
-        # auto sample for generators
         local = region.sample_local
         return f"+{cc}{local}", local, f"+{cc}"
 
-    # If user explicitly provided another country calling code, reject.
     if raw.lstrip().startswith("+") and not digits.startswith(cc):
         raise ValueError(
             f"当前协议国家区号为 +{cc}，请填写 {region.phone_cc} 开头的号码"
         )
 
-    # Strip country code if present
     if digits.startswith(cc):
         local = digits[len(cc):]
     elif digits.startswith("0") and not digits.startswith(cc):
-        # national trunk 0 — drop one leading 0
         local = digits[1:]
     else:
         local = digits
 
-    # If user typed full e164 without +, digits already handled above
-    if not local or not local.isdigit():
-        raise ValueError(f"手机号本地号码无效，请填写 {region.phone_cc} 开头的号码")
-
-    # Minimum local length (very loose)
-    if len(local) < 6 or len(local) > 15:
+    if not local or not local.isdigit() or not (6 <= len(local) <= 15):
         raise ValueError(
             f"手机号长度异常，请填写 {region.phone_cc} + 本地号码（6–15 位）"
         )
-
-    # If original digits don't start with country code and look like full intl of another country
-    # Accept local-only input and force selected country code.
-    e164 = f"+{cc}{local}"
-    return e164, local, f"+{cc}"
+    return f"+{cc}{local}", local, f"+{cc}"
 
 
 def list_regions_public() -> list[dict]:
@@ -192,7 +210,9 @@ def list_regions_public() -> list[dict]:
                 "locale": r.locale_bcp47,
                 "phone_cc": r.phone_cc,
                 "phone_placeholder": r.phone_placeholder,
-                "phone_hint": r.phone_hint or f"区号 {r.phone_cc}",
+                "phone_hint": r.phone_hint,
+                "protocol_base": r.protocol_base,
+                "identity": r.identity_type if r.send_identity_document else None,
             }
         )
     return out

@@ -12,6 +12,19 @@ from paypal.models import UserInfo, CardInfo, BillingAddress, generate_card as _
 from paypal.regions import normalize_phone, normalize_region, get_region, DEFAULT_REGION
 
 
+def generate_cpf() -> str:
+    """Generate a valid random CPF (digits only, 11)."""
+    nums = [random.randint(0, 9) for _ in range(9)]
+    s = sum((10 - i) * nums[i] for i in range(9))
+    d1 = (s * 10) % 11 % 10
+    nums.append(d1)
+    s = sum((11 - i) * nums[i] for i in range(10))
+    d2 = (s * 10) % 11 % 10
+    nums.append(d2)
+    return "".join(str(n) for n in nums)
+
+
+
 TH_FIRST = ["Somchai", "Somsak", "Anan", "Nattapong", "Siriporn", "Suda", "Pimchanok", "Kanokwan", "Waranya", "Natcha"]
 TH_LAST = ["Srisawat", "Saetang", "Wongsa", "Boonmee", "Jaidee", "Nakhon", "Sutham", "Phong"]
 TH_LOC = [
@@ -159,6 +172,12 @@ def generate_user(phone: str = "", country: str = DEFAULT_REGION) -> UserInfo:
     else:
         first, last = random.choice(EN_FIRST), random.choice(EN_LAST)
     e164, local, cc = normalize_phone(code, phone)
+    region = get_region(code)
+    cpf = ""
+    national_id = ""
+    if region.send_identity_document and region.identity_type == "CPF":
+        cpf = generate_cpf()
+        national_id = cpf
     return UserInfo(
         first_name=first,
         last_name=last,
@@ -168,8 +187,8 @@ def generate_user(phone: str = "", country: str = DEFAULT_REGION) -> UserInfo:
         phone_country_code=cc,
         password=generate_password(),
         dob=generate_dob(),
-        national_id="",
-        cpf="",
+        national_id=national_id,
+        cpf=cpf,
     )
 
 

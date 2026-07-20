@@ -12,18 +12,21 @@ function setCountry(code) {
   const next = String(code || "TH").toUpperCase();
   const sel = document.querySelector("#countrySelect");
   if (sel) {
-    // if option missing, keep previous
     if ([...sel.options].some((o) => o.value === next)) sel.value = next;
   }
-  const meta = COUNTRY_META[sel?.value || next] || COUNTRY_META.TH;
+  const country = sel?.value || next;
+  const meta = COUNTRY_META[country] || COUNTRY_META.TH;
   const phone = document.querySelector("#phone");
   if (phone && meta) {
-    phone.placeholder = meta.placeholder || (meta.phone_cc ? meta.phone_cc + "…" : phone.placeholder);
+    // 区号/完整样例只作为 placeholder 示例；绝不改动用户已输入的 value
+    const example = meta.placeholder || (meta.phone_cc ? `${meta.phone_cc}…` : "");
+    phone.placeholder = example;
     phone.title = meta.phone_cc
-      ? `只需填写带国际区号的号码（${meta.phone_cc}）`
-      : "请填写带国际区号的手机号";
+      ? `示例区号 ${meta.phone_cc}；填写后显示完整手机号`
+      : "示例号码；填写后显示完整手机号";
+    // 明确：不设置 phone.value，避免覆盖用户输入
   }
-  localStorage.setItem(COUNTRY_KEY, sel?.value || next);
+  localStorage.setItem(COUNTRY_KEY, country);
 }
 
 async function loadRegions() {

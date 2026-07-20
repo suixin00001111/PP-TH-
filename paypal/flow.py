@@ -754,11 +754,24 @@ class PayPalFlow:
             "marketingOptOut": True,
             "password": self.user.password,
             "dateOfBirth": self._dob_payload(),
-            # Thailand path: do not send Thailandian CPF. Keep field absent-compatible.
-            "identityDocument": None,
+            # Regional identity: Thailand-base path uses null except BR CPF.
+            "identityDocument": self._identity_document_payload(),
             "crsData": None,
             "legalAgreements": {},
         }
+
+
+    def _identity_document_payload(self):
+        """Build identityDocument for SignUpNewMember (region-aware)."""
+        region = self.region_profile
+        if not region.send_identity_document:
+            return None
+        if region.identity_type == "CPF":
+            value = (self.user.cpf or self.user.national_id or "").replace(".", "").replace("-", "").strip()
+            if not value:
+                return None
+            return {"type": "CPF", "value": value}
+        return None
 
     def _send_signup_attempt(self, token: str, signup_url: str) -> dict:
         card_type = self._card_issuer_type()
@@ -1611,6 +1624,7 @@ class PayPalFlow:
             result["b_layer"] = build_b_layer_evidence(result)
             result["protocol_mode"] = "http_only_full_protocol"
             result["region"] = get_region(self.address.country).code
+            result["protocol"] = get_region(self.address.country).protocol_summary()
         except Exception as exc:
             result.setdefault("b_layer_error", str(exc))
         return result
