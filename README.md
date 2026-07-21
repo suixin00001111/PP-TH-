@@ -222,3 +222,28 @@ Web 表单可选运行时与 SMSBower；CLI：
 .\.venv\Scripts\python.exe main.py --country JP --ba-token BA-xxx --phone +81... --runtime headless
 .\.venv\Scripts\python.exe main.py --country BR --ba-token BA-xxx --smsbower --smsbower-api-key KEY
 ```
+
+
+---
+
+## SMSBower 国家 ID
+
+平台使用数字 `country` 参数。项目内置 ISO2 → ID 映射表：`paypal/smsbower_countries.py`（兼容常见 sms-activate 编号，`BR=73`、`TH=52`、`JP=182`、`US=12` 等）。
+
+覆盖方式：
+
+```text
+SMSBOWER_COUNTRY=73
+# 或
+SMSBOWER_COUNTRY_MAP_JSON={"JP":"182","TH":"52"}
+```
+
+## DataDome Phase0（浏览器加深）
+
+当运行时为 `headless` / `auto` / `roxy` 时，Phase0 遇到 403/DataDome/authchallenge 会：
+
+1. 用对应国家 browser profile 调用 Playwright 或 Roxy 解链  
+2. 回灌 cookies / datadome / clientid 到 HTTP 会话  
+3. 重试协议页加载；仍失败再按重试策略回退  
+
+纯 `protocol` 模式不启浏览器（与默认一致）。

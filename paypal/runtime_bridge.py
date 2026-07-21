@@ -64,18 +64,8 @@ _TZ: dict[str, tuple[str, int]] = {
     "ZA": ("Africa/Johannesburg", -120),
 }
 
-# SMSBower platform country ids (subset; override with SMSBOWER_COUNTRY / job field)
-SMSBOWER_COUNTRY_IDS: dict[str, str] = {
-    "BR": "73",
-    "US": "12",  # common mapping may vary by provider — override via env
-    "GB": "16",
-    "TH": "52",
-    "ID": "6",
-    "PH": "4",
-    "IN": "22",
-    "MX": "54",
-    "JP": "182",
-}
+from paypal.smsbower_countries import SMSBOWER_COUNTRY_IDS, resolve_smsbower_country_id
+
 
 
 def _env(name: str, default: str = "") -> str:
@@ -199,57 +189,139 @@ def _import_cookies_to_session(session, cookies: list[dict[str, Any]] | None) ->
     return n
 
 
-def run_phase0_browser_assist(flow, page_url: str) -> dict[str, Any]:
-    """Optional DataDome/browser assist for Phase 0. Returns result dict."""
+def run_phase0_browser_assist(flow, page_url: str, *, force: bool = False, html: str = "", status_code: int = 0) -> dict[str, Any]:
+    """Deep Phase0 DataDome assist aligned with openai-paypal BR package.
+
+    - protocol mode: skip
+    - headless: solve_datadome_with_local_headless, import cookies + datadome
+    - roxy: solve_datadome_with_roxy when browser available, else capture profile
+    - on 403 / authchallenge markers: always attempt solve when not protocol
+    """
     mode = effective_browser_runtime(getattr(flow, "runtime_mode", None))
-    result: dict[str, Any] = {"runtime": mode, "ok": False, "skipped": mode == "protocol"}
-    if mode == "protocol":
+    result: dict[str, Any] = {"runtime": mode, "ok": False, "skipped": mode == "protocol", "reason": "phase0"}
+    if mode == "protocol" and not force:
         return result
 
     proto = flow._ensure_protocol()
     profile = seed_browser_profile(proto)
+    # keep module-level config profile roughly aligned for libraries that read it
+    try:
+        import config as cfg
+        if hasattr(cfg, "BROWSER_PROFILE") and isinstance(cfg.BROWSER_PROFILE, dict):
+            cfg.BROWSER_PROFILE.update(profile)
+    except Exception:
+        pass
+
     proxy_url = getattr(flow.proxy_config, "url", None)
-    cookies = _session_cookies_list(flow.session)
+    if hasattr(flow.session, "export_cookies_for_browser"):
+        cookies = flow.session.export_cookies_for_browser()
+    else:
+        cookies = _session_cookies_list(flow.session)
+
+    challenged = False
+    lower = (html or "").lower()
+    if status_code == 403 or "datadome" in lower or "captcha-delivery" in lower or "authchallenge" in lower:
+        challenged = True
+        result["challenged"] = True
+
+    def _apply_solved(solved: dict[str, Any], runtime: str) -> dict[str, Any]:
+        out = {"runtime": runtime, "ok": False, "skipped": False}
+        if not isinstance(solved, dict):
+            out["error"] = "empty solve result"
+            return out
+        out["detail"] = {
+            k: solved.get(k)
+            for k in ("ok", "status", "url", "error", "blocked_by_datadome", "datadome", "clientid")
+            if k in solved
+        }
+        cookies_in = solved.get("cookies") or []
+        n = 0
+        if hasattr(flow.session, "import_browser_cookies"):
+            n = flow.session.import_browser_cookies(cookies_in)
+        else:
+            n = _import_cookies_to_session(flow.session, cookies_in)
+        out["cookies_imported"] = n
+        datadome = str(solved.get("datadome") or "")
+        if datadome:
+            try:
+                flow.state.datadome_cookie = datadome
+            except Exception:
+                pass
+        clientid = str(solved.get("clientid") or "")
+        if clientid:
+            try:
+                flow.state.datadome_clientid = clientid  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        ok = bool(solved.get("ok") or datadome or n > 0)
+        out["ok"] = ok
+        if ok:
+            logger.info(
+                "DataDome/browser Phase0 cleared via {} cookies={} datadome={}",
+                runtime,
+                n,
+                bool(datadome),
+            )
+        else:
+            logger.warning("DataDome/browser Phase0 did not clear via {} detail={}", runtime, out.get("detail"))
+        return out
 
     try:
-        if mode == "roxy":
-            # Roxy path: capture profile + optional datadome via phase1-like open
-            from paypal.roxy_fingerprint import capture_roxy_runtime_profile
+        if mode == "roxy" or (mode == "auto" and has_roxy_key()):
+            try:
+                from paypal.roxy_fingerprint import (
+                    capture_roxy_runtime_profile,
+                    solve_datadome_with_roxy,
+                    load_roxy_capture_config,
+                )
+                # open/capture roxy browser first
+                cap = capture_roxy_runtime_profile(proxy_url=proxy_url, seed_profile=profile)
+                roxy_browser = None
+                if isinstance(cap, dict):
+                    roxy_browser = cap.get("roxy_browser") or cap
+                    if cap.get("cookies"):
+                        if hasattr(flow.session, "import_browser_cookies"):
+                            flow.session.import_browser_cookies(cap.get("cookies") or [])
+                        else:
+                            _import_cookies_to_session(flow.session, cap.get("cookies") or [])
+                if challenged or force or True:
+                    # always try solve on roxy path for phase0 assist
+                    if roxy_browser and isinstance(roxy_browser, dict):
+                        solved = solve_datadome_with_roxy(
+                            roxy_browser,
+                            page_url,
+                            cookies=cookies,
+                            wait_seconds=float(os.getenv("PAYPAL_DATADOME_ROXY_WAIT_SECONDS") or 12),
+                        )
+                        applied = _apply_solved(solved, "roxy")
+                        applied["capture_ok"] = bool(cap)
+                        return applied
+                result["ok"] = bool(cap)
+                result["capture"] = True
+                return result
+            except Exception as roxy_exc:
+                logger.warning("Roxy Phase0 assist failed, trying headless: {}", roxy_exc)
+                if resolve_runtime_mode(getattr(flow, "runtime_mode", None)) == "roxy":
+                    # fall through to headless only for auto; for explicit roxy record error
+                    if effective_browser_runtime(flow.runtime_mode) == "roxy" and not has_roxy_key():
+                        pass
+                # fallthrough headless
 
-            cap = capture_roxy_runtime_profile(proxy_url=proxy_url, seed_profile=profile)
-            result["ok"] = bool(cap)
-            result["capture"] = {k: cap.get(k) for k in ("ok", "runtime", "error") if isinstance(cap, dict)}
-            if isinstance(cap, dict) and cap.get("cookies"):
-                n = _import_cookies_to_session(flow.session, cap.get("cookies") or [])
-                result["cookies_imported"] = n
-            return result
-
-        # headless
         from paypal.local_headless import solve_datadome_with_local_headless
 
+        wait = float(os.getenv("PAYPAL_DATADOME_HEADLESS_WAIT_SECONDS") or 14)
         solved = solve_datadome_with_local_headless(
             page_url,
             cookies=cookies,
-            wait_seconds=12.0,
+            wait_seconds=wait,
             proxy_url=proxy_url,
             browser_profile=profile,
         )
-        result["ok"] = bool(solved and (solved.get("ok") or solved.get("datadome") or solved.get("cookies")))
-        if isinstance(solved, dict) and solved.get("cookies"):
-            n = _import_cookies_to_session(flow.session, solved.get("cookies") or [])
-            result["cookies_imported"] = n
-        result["detail"] = {
-            k: solved.get(k)
-            for k in ("ok", "runtime", "status", "error", "final_url")
-            if isinstance(solved, dict) and k in solved
-        }
-        return result
+        return _apply_solved(solved if isinstance(solved, dict) else {}, "headless")
     except Exception as exc:
         logger.warning("Phase0 browser assist failed ({}): {}", mode, exc)
         result["error"] = str(exc)
-        if resolve_runtime_mode(getattr(flow, "runtime_mode", None)) != "auto":
-            # non-auto: surface soft-fail, flow continues with protocol
-            pass
+        result["ok"] = False
         return result
 
 
@@ -325,16 +397,37 @@ def build_otp_provider(*, enabled: bool | None, api_key: str | None, country_iso
     provider = build_smsbower_provider(enabled=enabled, api_key=api_key)
     if provider is None:
         return None
-    # map ISO country to SMSBower numeric id when possible
     iso = (country_iso or "BR").upper()
-    sid = (
-        os.getenv("SMSBOWER_COUNTRY")
-        or os.getenv("PAYPAL_SMSBOWER_COUNTRY")
-        or SMSBOWER_COUNTRY_IDS.get(iso)
-        or getattr(provider, "country", "73")
-    )
+    sid = resolve_smsbower_country_id(iso)
     try:
         provider.country = str(sid)
+        logger.info("SMSBower country mapping {} -> id {}", iso, sid)
     except Exception:
         pass
     return provider
+
+
+def reserve_smsbower_number(flow) -> dict[str, Any]:
+    """Reserve SMSBower number, update flow.user phone, return public info."""
+    provider = getattr(flow, "_otp_provider", None)
+    if provider is None:
+        return {"ok": False, "error": "SMSBower not enabled"}
+    iso = flow._ensure_protocol().code
+    provider.country = resolve_smsbower_country_id(iso)
+    activation = provider.reserve_number()
+    # normalize to e164 for protocol country
+    phone_raw = getattr(activation, "phone_number", "") or ""
+    digits = "".join(ch for ch in str(phone_raw) if ch.isdigit())
+    e164 = phone_raw if str(phone_raw).startswith("+") else ("+" + digits)
+    try:
+        flow._update_user_phone(e164)
+    except Exception as exc:
+        logger.warning("SMSBower phone normalize failed ({}): {} raw={}", iso, exc, phone_raw)
+    flow._smsbower_activation = activation
+    try:
+        from paypal.smsbower import activation_to_public_dict
+        pub = activation_to_public_dict(activation)
+    except Exception:
+        pub = {"activation_id": getattr(activation, "activation_id", ""), "phone_number": e164[-4:].rjust(8, "*")}
+    logger.info("SMSBower reserved number for {} -> {}", iso, pub.get("phone_number"))
+    return {"ok": True, "activation": pub, "phone": flow.user.phone}

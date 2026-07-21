@@ -152,6 +152,83 @@ class PayPalSession:
     def close(self):
         self.client.close()
 
+    def export_cookies_for_browser(self) -> list[dict]:
+        """Export cookies for Playwright/Roxy add_cookies shape."""
+        exported: list[dict] = []
+        seen: set[tuple[str, str, str]] = set()
+
+        def add(name: str, value: str, domain: str = ".paypal.com", path: str = "/", secure: bool = True):
+            if not name or value is None:
+                return
+            domain = domain or ".paypal.com"
+            path = path or "/"
+            key = (name, domain, path)
+            if key in seen:
+                return
+            seen.add(key)
+            exported.append({
+                "name": str(name),
+                "value": str(value),
+                "domain": domain,
+                "path": path,
+                "secure": secure,
+            })
+
+        try:
+            for cookie in self.client.cookies:
+                if hasattr(cookie, "name") and hasattr(cookie, "value"):
+                    add(
+                        cookie.name,
+                        cookie.value,
+                        domain=getattr(cookie, "domain", None) or ".paypal.com",
+                        path=getattr(cookie, "path", None) or "/",
+                        secure=bool(getattr(cookie, "secure", True)),
+                    )
+                elif isinstance(cookie, (list, tuple)) and len(cookie) >= 2:
+                    add(str(cookie[0]), str(cookie[1]))
+        except Exception:
+            try:
+                # mapping-like
+                for name, value in dict(self.client.cookies).items():
+                    add(str(name), str(value))
+            except Exception:
+                pass
+        # ensure datadome from state
+        if getattr(self.state, "datadome_cookie", ""):
+            add("datadome", self.state.datadome_cookie, domain=".paypal.com")
+        return exported
+
+    def import_browser_cookies(self, cookies: list[dict] | None) -> int:
+        """Import browser-captured cookies into HTTP session. Returns count."""
+        if not cookies:
+            return 0
+        n = 0
+        cookie_dict: dict[str, str] = {}
+        for cookie in cookies:
+            name = str(cookie.get("name") or "")
+            value = str(cookie.get("value") or "")
+            if not name:
+                continue
+            domain = str(cookie.get("domain") or ".paypal.com")
+            path = str(cookie.get("path") or "/")
+            try:
+                self.client.cookies.set(name, value, domain=domain, path=path)
+            except Exception:
+                try:
+                    self.client.cookies.set(name, value)
+                except Exception:
+                    continue
+            cookie_dict[name] = value
+            n += 1
+            if name == "datadome":
+                self.state.datadome_cookie = value
+        try:
+            self.state.update_from_cookies(cookie_dict)
+        except Exception:
+            pass
+        return n
+
+
     def _sync_state_cookies(self):
         """Pull important cookies into SessionState after each request."""
         cookie_dict = {}

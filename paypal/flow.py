@@ -302,6 +302,27 @@ class PayPalFlow:
         finally:
             self.close()
 
+
+    def _capture_datadome_clientid(self, html: str) -> None:
+        """Extract DataDome client id from page HTML for header replay."""
+        if not html or "datadome" not in html.lower():
+            return
+        patterns = [
+            r"\bc\s*=\s*['\"]([^'\"]{40,})['\"]",
+            r"['\"]clientid['\"]\s*[:=]\s*['\"]([^'\"]{20,})['\"]",
+            r"ddcid['\"]?\s*[:=]\s*['\"]([^'\"]{20,})['\"]",
+        ]
+        for pat in patterns:
+            m = re.search(pat, html, re.I)
+            if m:
+                cid = m.group(1)
+                try:
+                    self.state.datadome_clientid = cid  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                logger.info("DataDome client id captured len={}", len(cid))
+                return
+
     def _phase0_initial_load(self):
         """Load the agreement approval page, handle DataDome if needed."""
         logger.info("--- Phase 0: Initial page load ---")
@@ -343,12 +364,37 @@ class PayPalFlow:
                 "Priority": "u=0, i",
             })
 
-            if resp.status_code == 403:
+            if resp.status_code == 403 or (
+                getattr(resp, "text", "") and (
+                    "datadome" in resp.text.lower()[:8000]
+                    or "captcha-delivery" in resp.text.lower()[:8000]
+                    or "authchallenge" in resp.text.lower()[:8000]
+                )
+            ):
+                # Deep DataDome path (aligned with openai-paypal Phase0)
+                try:
+                    from paypal.runtime_bridge import run_phase0_browser_assist, resolve_runtime_mode
+                    if resolve_runtime_mode(getattr(self, "runtime_mode", None)) != "protocol":
+                        logger.warning("Phase 0: challenge detected (status={}), invoking browser DataDome solve...", resp.status_code)
+                        solved = run_phase0_browser_assist(
+                            self,
+                            url,
+                            force=True,
+                            html=getattr(resp, "text", "") or "",
+                            status_code=int(getattr(resp, "status_code", 0) or 0),
+                        )
+                        if solved.get("ok"):
+                            logger.info("Phase 0: DataDome browser solve ok, retrying page load")
+                            continue
+                        logger.warning("Phase 0: DataDome browser solve incomplete: {}", solved)
+                except Exception as dd_exc:
+                    logger.warning("Phase 0: DataDome browser solve error: {}", dd_exc)
                 if attempt < max_retries - 1:
-                    logger.warning("Phase 0: DataDome 403, will retry...")
+                    logger.warning("Phase 0: DataDome/challenge still present, will retry...")
                     continue
                 raise RuntimeError(
-                    "Phase 0: DataDome challenge detected after all retries; an empty adsddtoken is not a valid solution"
+                    "Phase 0: DataDome challenge detected after all retries; enable --runtime headless/auto "
+                    "and install Playwright chromium, or solve via Roxy"
                 )
 
             break  # success
@@ -363,6 +409,7 @@ class PayPalFlow:
         # Parse the login/signup page
         html = resp.text
         logger.info(f"Page loaded: {resp.status_code}, {len(html)} bytes")
+        self._capture_datadome_clientid(html)
         self._extract_modxo_action_ids(html, str(resp.url))
 
         # Extract ctxId

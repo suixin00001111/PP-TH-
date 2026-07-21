@@ -551,26 +551,46 @@ class WebPayPalFlow(PayPalFlow):
 
             logger.info("SMS verification code sent to phone: {}", self._masked_phone())
 
-            # SMSBower auto OTP (optional) — still fall back to manual input
+            # SMSBower auto OTP full path (optional) — fall back to manual input
             provider = getattr(self, "_otp_provider", None)
             if provider is not None:
                 try:
+                    from paypal.runtime_bridge import reserve_smsbower_number
                     self.job.set_status("running", "SMSBower 自动接码中…")
-                    # If provider already reserved a number matching job phone, wait;
-                    # otherwise try wait_for_code only if activation stored on flow.
                     activation = getattr(self, "_smsbower_activation", None)
+                    # If user phone may not be SMSBower-owned, reserve number then re-initiate OTP once
                     if activation is None and hasattr(provider, "reserve_number"):
-                        # only reserve if job phone looks empty/synthetic — prefer user phone
-                        logger.info("SMSBower provider ready; waiting for SMS on configured number channel")
+                        reserved = reserve_smsbower_number(self)
+                        if reserved.get("ok"):
+                            activation = getattr(self, "_smsbower_activation", None)
+                            logger.info("SMSBower number ready, re-initiating OTP to {}", self._masked_phone())
+                            try:
+                                if hasattr(provider, "mark_sms_sent") and activation is not None:
+                                    # will mark after re-init
+                                    pass
+                                auth_id, challenge_id = self._initiate_2fa_phone_confirmation(token, signup_url)
+                                if activation is not None and hasattr(provider, "mark_sms_sent"):
+                                    provider.mark_sms_sent(activation)
+                            except Exception as re_exc:
+                                logger.warning("Re-initiate OTP after SMSBower reserve failed: {}", re_exc)
                     if activation is not None and hasattr(provider, "wait_for_code"):
+                        if hasattr(provider, "mark_sms_sent"):
+                            try:
+                                provider.mark_sms_sent(activation)
+                            except Exception:
+                                pass
                         code = provider.wait_for_code(activation)
-                        if code and len(code) >= 4 and code.isdigit():
-                            logger.info("SMSBower code received, confirming…")
+                        if code:
+                            code = "".join(ch for ch in str(code) if ch.isdigit())
+                        if code and 4 <= len(code) <= 8:
+                            logger.info("SMSBower code received (len={}), confirming…", len(code))
                             if self._confirm_2fa_phone_confirmation(
                                 token, signup_url, auth_id, challenge_id, code
                             ):
                                 return
                             logger.warning("SMSBower code rejected by PayPal; fall back to manual OTP")
+                        else:
+                            logger.warning("SMSBower did not return code in time; fall back to manual OTP")
                 except Exception as sms_exc:
                     logger.warning("SMSBower auto OTP failed, fall back to manual: {}", sms_exc)
 
