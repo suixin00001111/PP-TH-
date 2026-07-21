@@ -245,8 +245,19 @@ class PayPalSession:
             pass
         self.state.update_from_cookies(cookie_dict)
 
+    def _merge_datadome_headers(self, kwargs: dict) -> dict:
+        headers = dict(kwargs.get("headers") or {})
+        clientid = str(getattr(self.state, "datadome_clientid", "") or "")
+        cookie = str(getattr(self.state, "datadome_cookie", "") or "")
+        if clientid and not cookie and "x-datadome-clientid" not in {k.lower() for k in headers}:
+            headers["x-datadome-clientid"] = clientid
+        if headers:
+            kwargs["headers"] = headers
+        return kwargs
+
     def get(self, url: str, **kwargs):
         logger.debug(f"GET {url}")
+        kwargs = self._merge_datadome_headers(kwargs)
         resp = self.client.get(url, **kwargs)
         self._sync_state_cookies()
         logger.debug(f"  -> {resp.status_code} ({len(resp.content)} bytes)")
@@ -254,6 +265,7 @@ class PayPalSession:
 
     def post(self, url: str, **kwargs):
         logger.debug(f"POST {url}")
+        kwargs = self._merge_datadome_headers(kwargs)
         resp = self.client.post(url, **kwargs)
         self._sync_state_cookies()
         logger.debug(f"  -> {resp.status_code} ({len(resp.content)} bytes)")

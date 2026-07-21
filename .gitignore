@@ -24,3 +24,9 @@ b_layer_evidence.json
 merchant_session.json
 **/b_layer_evidence.json
 **/merchant_session.json
+_pay153_countries.json
+work_flow_smoke.*
+*.err
+var/
+cache/
+debug/

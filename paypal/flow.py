@@ -303,6 +303,35 @@ class PayPalFlow:
             self.close()
 
 
+
+    @staticmethod
+    def _looks_like_hard_datadome_block(status_code: int, html: str) -> bool:
+        """True only for real blocking challenges — not mere 'datadome' script tags on 200 pages."""
+        if int(status_code or 0) == 403:
+            return True
+        lower = (html or "").lower()
+        if not lower:
+            return False
+        hard_markers = (
+            "captcha-delivery.com",
+            "device_check_redirect_to_slider",
+            "block_page_loaded",
+            "ddc-captcha",
+            "geo.ddc.paypal.com/captcha",
+            "paypal-authchallenge",
+            "/authchallenge",
+            "edge_bot_protection",
+            "please enable js and disable any ad blocker",
+            "datadome captcha",
+        )
+        # soft presence of "datadome" alone is normal on PayPal pages
+        if any(m in lower for m in hard_markers):
+            return True
+        # 200 pages with interstitial challenge wording
+        if status_code == 200 and "captcha" in lower and "datadome" in lower and "interstitial" in lower:
+            return True
+        return False
+
     def _capture_datadome_clientid(self, html: str) -> None:
         """Extract DataDome client id from page HTML for header replay."""
         if not html or "datadome" not in html.lower():
@@ -343,6 +372,12 @@ class PayPalFlow:
                 logger.info(f"Phase 0 retry {attempt}/{max_retries - 1} after {delay}s delay...")
                 time.sleep(delay)
                 # Recreate session with fresh proxy connection (may get different exit IP)
+                saved_cookies = []
+                try:
+                    if hasattr(self.session, "export_cookies_for_browser"):
+                        saved_cookies = self.session.export_cookies_for_browser()
+                except Exception:
+                    saved_cookies = []
                 self.session.close()
                 proto = self._ensure_protocol()
                 self.session = PayPalSession(
@@ -352,9 +387,22 @@ class PayPalFlow:
                     country=proto.code,
                     locale=proto.locale_bcp47,
                 )
+                if saved_cookies and hasattr(self.session, "import_browser_cookies"):
+                    try:
+                        self.session.import_browser_cookies(saved_cookies)
+                    except Exception:
+                        pass
+                # re-apply datadome cookie from state
+                if getattr(self.state, "datadome_cookie", ""):
+                    try:
+                        self.session.client.cookies.set(
+                            "datadome", self.state.datadome_cookie, domain=".paypal.com", path="/"
+                        )
+                    except Exception:
+                        pass
 
             # First GET - may return 403 with DataDome challenge or 302 redirect
-            resp = self.session.get(url, headers={
+            phase0_headers = {
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Upgrade-Insecure-Requests": "1",
                 "Sec-Fetch-Dest": "document",
@@ -362,14 +410,15 @@ class PayPalFlow:
                 "Sec-Fetch-Site": "none",
                 "Sec-Fetch-User": "?1",
                 "Priority": "u=0, i",
-            })
+            }
+            clientid = str(getattr(self.state, "datadome_clientid", "") or "")
+            if clientid and not getattr(self.state, "datadome_cookie", ""):
+                phase0_headers["x-datadome-clientid"] = clientid
+            resp = self.session.get(url, headers=phase0_headers)
 
-            if resp.status_code == 403 or (
-                getattr(resp, "text", "") and (
-                    "datadome" in resp.text.lower()[:8000]
-                    or "captcha-delivery" in resp.text.lower()[:8000]
-                    or "authchallenge" in resp.text.lower()[:8000]
-                )
+            if self._looks_like_hard_datadome_block(
+                int(getattr(resp, "status_code", 0) or 0),
+                getattr(resp, "text", "") or "",
             ):
                 # Deep DataDome path (aligned with openai-paypal Phase0)
                 try:
@@ -734,6 +783,53 @@ class PayPalFlow:
             logger.warning("OTP confirmation failed, state: {}", confirm_state or "<missing>")
         return False
 
+
+    def _try_smsbower_auto_confirm(
+        self,
+        token: str,
+        signup_url: str,
+        auth_id: str,
+        challenge_id: str,
+    ) -> bool:
+        """Try SMSBower auto OTP. Returns True if confirmed. Never raises to caller for soft fail."""
+        provider = getattr(self, "_otp_provider", None)
+        if provider is None:
+            return False
+        try:
+            from paypal.runtime_bridge import reserve_smsbower_number
+            activation = getattr(self, "_smsbower_activation", None)
+            if activation is None:
+                reserved = reserve_smsbower_number(self)
+                if not reserved.get("ok"):
+                    logger.warning("SMSBower reserve failed: {}", reserved)
+                    return False
+                activation = getattr(self, "_smsbower_activation", None)
+                # re-send OTP to SMSBower number
+                auth_id, challenge_id = self._initiate_2fa_phone_confirmation(token, signup_url)
+            if activation is not None and hasattr(provider, "mark_sms_sent"):
+                try:
+                    provider.mark_sms_sent(activation)
+                except Exception:
+                    pass
+            if activation is None or not hasattr(provider, "wait_for_code"):
+                return False
+            code = provider.wait_for_code(activation)
+            if not code:
+                logger.warning("SMSBower timeout waiting for code")
+                return False
+            code = "".join(ch for ch in str(code) if ch.isdigit())
+            if not (4 <= len(code) <= 8):
+                return False
+            logger.info("SMSBower code received len={}", len(code))
+            return bool(
+                self._confirm_2fa_phone_confirmation(
+                    token, signup_url, auth_id, challenge_id, code
+                )
+            )
+        except Exception as exc:
+            logger.warning("SMSBower auto confirm failed: {}", exc)
+            return False
+
     def _confirm_phone_with_retry(self, token: str, signup_url: str):
         """Loop until OTP is confirmed; user can enter a new phone to resend."""
         while True:
@@ -754,6 +850,10 @@ class PayPalFlow:
                     except ValueError as phone_error:
                         logger.warning("手机号无效：{}。请重新输入。", phone_error)
                 continue
+
+            if self._try_smsbower_auto_confirm(token, signup_url, auth_id, challenge_id):
+                return
+
             logger.info("SMS verification code sent to phone: {}", self._masked_phone())
 
             while True:
