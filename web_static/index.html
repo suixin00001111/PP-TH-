@@ -71,6 +71,14 @@
             <span>手机号</span>
             <input id="phone" name="phone" required placeholder="+66812345678" inputmode="tel" autocomplete="tel" />
           </label>
+          <label>
+            <span>运行时</span>
+            <select id="runtimeMode" name="runtimeMode">
+              <option value="protocol" selected>protocol · 纯协议</option>
+              <option value="headless">headless · Playwright</option>
+              <option value="auto">auto · 自动</option>
+            </select>
+          </label>
           <div class="form-row">
             <label>
               <span>最大换卡次数</span>
@@ -83,6 +91,16 @@
             <label class="check-row">
               <input id="proxyEnabled" name="proxyEnabled" type="checkbox" checked />
               <span>启用代理</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="check-row">
+              <input id="smsbowerEnabled" name="smsbowerEnabled" type="checkbox" />
+              <span>SMSBower 自动接码</span>
+            </label>
+            <label>
+              <span>SMSBower API Key（可选）</span>
+              <input id="smsbowerApiKey" name="smsbowerApiKey" type="password" autocomplete="off" placeholder="留空则用手填 OTP" />
             </label>
           </div>
           <div id="proxyPanel" class="proxy-panel">

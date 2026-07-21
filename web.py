@@ -305,6 +305,9 @@ class WebJob:
     ba_token: str
     phone: str
     country: str = "TH"
+    runtime_mode: str = "protocol"
+    smsbower_enabled: bool = False
+    _smsbower_api_key: str = ""
     debug: bool = False
     max_card_attempts: int = 5
     proxy_enabled: bool = False
@@ -425,6 +428,8 @@ class WebJob:
                 "ba_token": mask_middle(self.ba_token),
                 "phone": mask_phone(self.phone),
                 "country": self.country,
+                "runtime_mode": self.runtime_mode,
+                "smsbower_enabled": self.smsbower_enabled,
                 "debug": self.debug and ALLOW_DEBUG_LOGS,
                 "max_card_attempts": self.max_card_attempts,
                 "proxy_enabled": self.proxy_enabled,
@@ -546,6 +551,29 @@ class WebPayPalFlow(PayPalFlow):
 
             logger.info("SMS verification code sent to phone: {}", self._masked_phone())
 
+            # SMSBower auto OTP (optional) — still fall back to manual input
+            provider = getattr(self, "_otp_provider", None)
+            if provider is not None:
+                try:
+                    self.job.set_status("running", "SMSBower 自动接码中…")
+                    # If provider already reserved a number matching job phone, wait;
+                    # otherwise try wait_for_code only if activation stored on flow.
+                    activation = getattr(self, "_smsbower_activation", None)
+                    if activation is None and hasattr(provider, "reserve_number"):
+                        # only reserve if job phone looks empty/synthetic — prefer user phone
+                        logger.info("SMSBower provider ready; waiting for SMS on configured number channel")
+                    if activation is not None and hasattr(provider, "wait_for_code"):
+                        code = provider.wait_for_code(activation)
+                        if code and len(code) >= 4 and code.isdigit():
+                            logger.info("SMSBower code received, confirming…")
+                            if self._confirm_2fa_phone_confirmation(
+                                token, signup_url, auth_id, challenge_id, code
+                            ):
+                                return
+                            logger.warning("SMSBower code rejected by PayPal; fall back to manual OTP")
+                except Exception as sms_exc:
+                    logger.warning("SMSBower auto OTP failed, fall back to manual: {}", sms_exc)
+
             while True:
                 value = self._prompt_operator(
                     f"请输入6位短信验证码；如需换号，输入新手机号（如 {get_region(self.job.country).phone_placeholder}）；输入 q 退出。"
@@ -618,6 +646,9 @@ def create_job(
     proxy_enabled: bool = False,
     proxy: str = "",
     country: str = "TH",
+    runtime_mode: str = "protocol",
+    smsbower_enabled: bool = False,
+    smsbower_api_key: str = "",
 ) -> WebJob:
     ba_token = (ba_token or "").strip()
     if not ba_token:
@@ -628,6 +659,10 @@ def create_job(
         raise ValueError("手机号不能为空")
     country = normalize_region(country)
     phone = normalize_region_phone(country, phone)
+    from paypal.runtime_bridge import resolve_runtime_mode
+    runtime_mode = resolve_runtime_mode(runtime_mode)
+    smsbower_enabled = bool(smsbower_enabled)
+    smsbower_api_key = (smsbower_api_key or "").strip()
     try:
         max_card_attempts = int(max_card_attempts)
     except Exception as exc:
@@ -650,6 +685,9 @@ def create_job(
         ba_token=ba_token,
         phone=phone,
         country=country,
+        runtime_mode=runtime_mode,
+        smsbower_enabled=smsbower_enabled,
+        _smsbower_api_key=smsbower_api_key,
         debug=debug,
         max_card_attempts=max_card_attempts,
         proxy_enabled=proxy_config.enabled,
@@ -697,6 +735,8 @@ def run_job(job: WebJob) -> None:
 
             logger.info("Web job started: {}", job.id)
             logger.info("Proxy: {}", proxy_config.label)
+            logger.info("Runtime mode: {}", getattr(job, "runtime_mode", "protocol"))
+            logger.info("SMSBower: {}", "on" if getattr(job, "smsbower_enabled", False) else "off")
             logger.info("User: {} {}", user.first_name, user.last_name)
             logger.info("Email: {}", mask_email(user.email))
             logger.info("Phone: {}", mask_phone(user.phone))
@@ -714,6 +754,9 @@ def run_job(job: WebJob) -> None:
                 address=address,
                 max_card_attempts=job.max_card_attempts,
                 proxy_config=proxy_config,
+                runtime_mode=getattr(job, "runtime_mode", "protocol"),
+                smsbower_enabled=getattr(job, "smsbower_enabled", False),
+                smsbower_api_key=getattr(job, "_smsbower_api_key", ""),
                 job=job,
             )
             result = flow.run()
@@ -883,6 +926,9 @@ class WebHandler(BaseHTTPRequestHandler):
                         or ""
                     ),
                     country=str(data.get("country") or data.get("region") or "TH"),
+                    runtime_mode=str(data.get("runtime_mode") or data.get("runtime") or "protocol"),
+                    smsbower_enabled=bool(data.get("smsbower_enabled") or data.get("smsbower") or False),
+                    smsbower_api_key=str(data.get("smsbower_api_key") or ""),
                 )
                 return self.send_json({"job": job.to_dict(include_logs=False)}, status=HTTPStatus.CREATED)
             except Exception as exc:

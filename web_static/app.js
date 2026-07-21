@@ -2,6 +2,8 @@ const THEME_KEY = "pp-th-theme";
 const PROXY_LS_KEY = "pp-th-proxy-raw";
 const PROXY_ON_KEY = "pp-th-proxy-enabled";
 const COUNTRY_KEY = "pp-th-country";
+const RUNTIME_KEY = "pp-th-runtime";
+const SMSBOWER_ON_KEY = "pp-th-smsbower-on";
 /** @type {Record<string, {placeholder:string, phone_cc?:string, name_zh?:string}>} */
 let COUNTRY_META = {
   TH: { placeholder: "+66812345678", phone_cc: "+66", name_zh: "泰国" },
@@ -357,6 +359,10 @@ async function startJob(evt) {
   label.textContent = "启动中…";
   try {
     saveProxyPrefs();
+    try {
+      if ($('#runtimeMode')) localStorage.setItem(RUNTIME_KEY, $('#runtimeMode').value);
+      if ($('#smsbowerEnabled')) localStorage.setItem(SMSBOWER_ON_KEY, $('#smsbowerEnabled').checked ? '1' : '0');
+    } catch (e) {}
     if ($("#proxyEnabled").checked && !$("#proxyRaw").value.trim()) {
       throw new Error("已启用代理，请填写代理信息");
     }
@@ -364,6 +370,10 @@ async function startJob(evt) {
     if ($("#proxyEnabled").checked && proxyNorm && $("#proxyRaw")) {
       $("#proxyRaw").value = proxyNorm;
       saveProxyPrefs();
+    try {
+      if ($('#runtimeMode')) localStorage.setItem(RUNTIME_KEY, $('#runtimeMode').value);
+      if ($('#smsbowerEnabled')) localStorage.setItem(SMSBOWER_ON_KEY, $('#smsbowerEnabled').checked ? '1' : '0');
+    } catch (e) {}
     }
     const data = await api("/api/jobs", {
       method: "POST",
@@ -375,6 +385,9 @@ async function startJob(evt) {
         proxy_enabled: $("#proxyEnabled").checked,
         proxy: proxyNorm,
         country: $("#countrySelect") ? $("#countrySelect").value : "TH",
+        runtime_mode: $("#runtimeMode") ? $("#runtimeMode").value : "protocol",
+        smsbower_enabled: $("#smsbowerEnabled") ? $("#smsbowerEnabled").checked : false,
+        smsbower_api_key: $("#smsbowerApiKey") ? $("#smsbowerApiKey").value.trim() : "",
       }),
     });
     toast("任务已启动");
@@ -429,6 +442,10 @@ function bind() {
     proxyEnabled.addEventListener("change", () => {
       syncProxyPanel();
       saveProxyPrefs();
+    try {
+      if ($('#runtimeMode')) localStorage.setItem(RUNTIME_KEY, $('#runtimeMode').value);
+      if ($('#smsbowerEnabled')) localStorage.setItem(SMSBOWER_ON_KEY, $('#smsbowerEnabled').checked ? '1' : '0');
+    } catch (e) {}
     });
   }
   const proxyRaw = $("#proxyRaw");
@@ -437,6 +454,10 @@ function bind() {
       const v = proxyRaw.value.trim();
       if (v) proxyRaw.value = normalizeProxyInput(v);
       saveProxyPrefs();
+    try {
+      if ($('#runtimeMode')) localStorage.setItem(RUNTIME_KEY, $('#runtimeMode').value);
+      if ($('#smsbowerEnabled')) localStorage.setItem(SMSBOWER_ON_KEY, $('#smsbowerEnabled').checked ? '1' : '0');
+    } catch (e) {}
     });
   }
   const countrySel = $("#countrySelect");
@@ -449,6 +470,12 @@ function bind() {
 
 initTheme();
 loadProxyPrefs();
+try {
+  const rt = localStorage.getItem(RUNTIME_KEY);
+  if (rt && document.querySelector('#runtimeMode')) document.querySelector('#runtimeMode').value = rt;
+  const sb = localStorage.getItem(SMSBOWER_ON_KEY);
+  if (sb != null && document.querySelector('#smsbowerEnabled')) document.querySelector('#smsbowerEnabled').checked = sb === '1';
+} catch (e) {}
 bind();
 loadRegions().catch(() => loadCountryPref());
 health();

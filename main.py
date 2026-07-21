@@ -33,7 +33,20 @@ def main():
     )
     parser.add_argument(
         "--country", default="TH",
-        help="Protocol region: TH (Thailand) or JP (Japan)",
+        help="Protocol country code (TH/JP/US/BR/...)",
+    )
+    parser.add_argument(
+        "--runtime", default=None,
+        choices=["protocol", "headless", "auto", "roxy"],
+        help="Risk runtime: protocol | headless | auto | roxy",
+    )
+    parser.add_argument(
+        "--smsbower", action="store_true",
+        help="Enable SMSBower auto OTP (coexists with manual OTP on Web)",
+    )
+    parser.add_argument(
+        "--smsbower-api-key", default=None,
+        help="SMSBower API key (or env SMSBOWER_API_KEY)",
     )
     parser.add_argument(
         "--debug", action="store_true",
@@ -102,6 +115,9 @@ def main():
         address=address,
         max_card_attempts=args.max_card_attempts,
         proxy_config=proxy_config,
+        runtime_mode=args.runtime,
+        smsbower_enabled=bool(args.smsbower) or None,
+        smsbower_api_key=args.smsbower_api_key,
     )
 
     result = flow.run()

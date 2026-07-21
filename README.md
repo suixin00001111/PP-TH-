@@ -194,3 +194,31 @@ socks5://user:pass@host:port
 ## 许可证
 
 私有仓库。
+
+
+---
+
+## 浏览器运行时与接码（参考巴西 openai-paypal）
+
+| 能力 | 说明 |
+|------|------|
+| **protocol** | 纯 HTTP（默认） |
+| **headless** | Playwright 无头 Chromium 辅助 Phase0/1 风控 |
+| **auto** | 有 Roxy Key 优先 Roxy，否则 headless，失败回退协议 |
+| **Roxy** | RoxyBrowser Local API（需本机 Roxy + API Key） |
+| **MTR** | headless/roxy/python_generated 信号（随运行时） |
+| **SMSBower** | 自动接码（默认关），与 Web 手填 OTP 并存 |
+
+安装 headless 依赖：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-headless.txt
+.\.venv\Scripts\python.exe -m playwright install chromium
+```
+
+Web 表单可选运行时与 SMSBower；CLI：
+
+```powershell
+.\.venv\Scripts\python.exe main.py --country JP --ba-token BA-xxx --phone +81... --runtime headless
+.\.venv\Scripts\python.exe main.py --country BR --ba-token BA-xxx --smsbower --smsbower-api-key KEY
+```

@@ -73,6 +73,9 @@ class PayPalFlow:
         proxy_enabled: bool | None = None,
         proxy_index: int | None = None,
         proxy_config: ProxyConfig | None = None,
+        runtime_mode: str | None = None,
+        smsbower_enabled: bool | None = None,
+        smsbower_api_key: str | None = None,
     ):
         ba_token = (ba_token or "").strip()
         if not BA_TOKEN_RE.fullmatch(ba_token):
@@ -88,6 +91,12 @@ class PayPalFlow:
             enabled=proxy_enabled,
             index=proxy_index,
         )
+        from paypal.runtime_bridge import resolve_runtime_mode, effective_browser_runtime, build_otp_provider
+        self.runtime_mode = resolve_runtime_mode(runtime_mode)
+        self.browser_runtime = effective_browser_runtime(self.runtime_mode)
+        self.smsbower_enabled = smsbower_enabled
+        self.smsbower_api_key = smsbower_api_key
+        self._otp_provider = None
         # Bind country protocol context (TH is reference machine; not TH constants).
         self.protocol = build_protocol(self.address.country)
         self.address.country = self.protocol.code
@@ -108,6 +117,22 @@ class PayPalFlow:
             self.protocol.locale_tag,
             self.protocol.phone_cc,
         )
+        logger.info(
+            "Runtime: mode={} browser_engine={}",
+            self.runtime_mode,
+            self.browser_runtime,
+        )
+        try:
+            self._otp_provider = build_otp_provider(
+                enabled=self.smsbower_enabled,
+                api_key=self.smsbower_api_key,
+                country_iso=self.protocol.code,
+            )
+            if self._otp_provider:
+                logger.info("SMSBower auto-OTP enabled for country {}", self.protocol.code)
+        except Exception as otp_exc:
+            logger.warning("SMSBower init skipped: {}", otp_exc)
+            self._otp_provider = None
 
     def close(self):
         self.session.close()
@@ -282,6 +307,13 @@ class PayPalFlow:
         logger.info("--- Phase 0: Initial page load ---")
 
         url = f"https://www.paypal.com/agreements/approve?ba_token={self.ba_token}"
+        try:
+            from paypal.runtime_bridge import run_phase0_browser_assist
+            assist0 = run_phase0_browser_assist(self, url)
+            if assist0 and not assist0.get("skipped"):
+                logger.info("Phase0 browser assist: {}", assist0)
+        except Exception as assist_exc:
+            logger.warning("Phase0 browser assist error: {}", assist_exc)
 
         max_retries = 4
         for attempt in range(max_retries):
@@ -1061,6 +1093,14 @@ class PayPalFlow:
     def _phase1_risk_controls(self):
         """Send device fingerprints, Tealeaf data, analytics."""
         logger.info("--- Phase 1: Risk control signals ---")
+        try:
+            from paypal.runtime_bridge import run_phase1_browser_assist
+            page_url = f"https://www.paypal.com/agreements/approve?ba_token={self.ba_token}"
+            assist1 = run_phase1_browser_assist(self, page_url)
+            if assist1 and not assist1.get("skipped"):
+                logger.info("Phase1 browser assist: {}", {k: assist1.get(k) for k in ("runtime","ok","error","mtr_protocol","cookies_imported")})
+        except Exception as assist_exc:
+            logger.warning("Phase1 browser assist error: {}", assist_exc)
 
         # Device fingerprint (p1, p2, w endpoints)
         send_device_fingerprint(self.session, self.ba_token)
