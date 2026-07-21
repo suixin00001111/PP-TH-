@@ -358,10 +358,11 @@ class PayPalFlow:
 
         url = f"https://www.paypal.com/agreements/approve?ba_token={self.ba_token}"
         try:
-            from paypal.runtime_bridge import run_phase0_browser_assist
-            assist0 = run_phase0_browser_assist(self, url)
-            if assist0 and not assist0.get("skipped"):
-                logger.info("Phase0 browser assist: {}", assist0)
+            from paypal.runtime_bridge import run_phase0_browser_assist, resolve_runtime_mode
+            if resolve_runtime_mode(getattr(self, "runtime_mode", None)) != "protocol":
+                assist0 = run_phase0_browser_assist(self, url)
+                if assist0 and not assist0.get("skipped"):
+                    logger.info("Phase0 browser assist: {}", {k: assist0.get(k) for k in ("runtime", "ok", "error", "cookies_imported")})
         except Exception as assist_exc:
             logger.warning("Phase0 browser assist error: {}", assist_exc)
 

@@ -111,6 +111,38 @@ def _paypal_debug_id(headers) -> str:
     return ""
 
 
+
+def looks_like_paypal_authchallenge(text: str) -> bool:
+    """True when PayPal returned Security Challenge HTML instead of JSON."""
+    head = (text or "").lstrip()[:20000].lower()
+    if not head.startswith("<"):
+        return False
+    return any(
+        marker in head
+        for marker in (
+            "authchallenge",
+            "authchallengenodeweb",
+            "data-captcha-type",
+            "/auth/validatecaptcha",
+            "hcaptchapassive",
+            "recaptcha",
+            "captcha-delivery.com",
+            "ddc-captcha",
+        )
+    )
+
+
+class PayPalAuthChallenge(RuntimeError):
+    def __init__(self, operation_name: str, status_code: int, debug_id: str, html: str):
+        self.operation_name = operation_name
+        self.status_code = status_code
+        self.debug_id = debug_id
+        self.html = html or ""
+        super().__init__(
+            f"PayPal authchallenge for {operation_name} status={status_code} debug_id={debug_id or '<missing>'}"
+        )
+
+
 class PayPalSession:
     """Manages HTTP session with cookie persistence and logging.
     
@@ -245,11 +277,29 @@ class PayPalSession:
             pass
         self.state.update_from_cookies(cookie_dict)
 
-    def _merge_datadome_headers(self, kwargs: dict) -> dict:
+    def _is_datadome_covered_host(self, url: str) -> bool:
+        try:
+            from urllib.parse import urlparse
+            host = (urlparse(url).hostname or "").lower()
+        except Exception:
+            return False
+        return (
+            host in {"paypal.com", "www.paypal.com", "venmo.com"}
+            or host.endswith(".paypal.com")
+            or host.endswith(".venmo.com")
+        )
+
+    def _merge_datadome_headers(self, kwargs: dict, url: str = "") -> dict:
+        """Mirror PayPal DataDome bootstrap: inject clientid when cookie missing."""
         headers = dict(kwargs.get("headers") or {})
         clientid = str(getattr(self.state, "datadome_clientid", "") or "")
         cookie = str(getattr(self.state, "datadome_cookie", "") or "")
-        if clientid and not cookie and "x-datadome-clientid" not in {k.lower() for k in headers}:
+        if (
+            clientid
+            and not cookie
+            and (not url or self._is_datadome_covered_host(url))
+            and "x-datadome-clientid" not in {str(k).lower() for k in headers}
+        ):
             headers["x-datadome-clientid"] = clientid
         if headers:
             kwargs["headers"] = headers
@@ -257,7 +307,7 @@ class PayPalSession:
 
     def get(self, url: str, **kwargs):
         logger.debug(f"GET {url}")
-        kwargs = self._merge_datadome_headers(kwargs)
+        kwargs = self._merge_datadome_headers(kwargs, url)
         resp = self.client.get(url, **kwargs)
         self._sync_state_cookies()
         logger.debug(f"  -> {resp.status_code} ({len(resp.content)} bytes)")
@@ -265,7 +315,7 @@ class PayPalSession:
 
     def post(self, url: str, **kwargs):
         logger.debug(f"POST {url}")
-        kwargs = self._merge_datadome_headers(kwargs)
+        kwargs = self._merge_datadome_headers(kwargs, url)
         resp = self.client.post(url, **kwargs)
         self._sync_state_cookies()
         logger.debug(f"  -> {resp.status_code} ({len(resp.content)} bytes)")
@@ -339,12 +389,22 @@ class PayPalSession:
         try:
             result = resp.json()
         except ValueError:
+            text = getattr(resp, "text", "") or ""
+            if looks_like_paypal_authchallenge(text):
+                logger.warning(
+                    "GraphQL {} returned authchallenge HTML: status={} paypal_debug_id={} body={}",
+                    operation_name,
+                    resp.status_code,
+                    debug_id or "<missing>",
+                    text[:1200],
+                )
+                raise PayPalAuthChallenge(operation_name, resp.status_code, debug_id, text)
             logger.error(
                 "GraphQL {} returned non-JSON response: status={} paypal_debug_id={} body={}",
                 operation_name,
                 resp.status_code,
                 debug_id or "<missing>",
-                resp.text[:2000],
+                text[:2000],
             )
             raise
 

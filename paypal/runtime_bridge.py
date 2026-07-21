@@ -275,7 +275,7 @@ def run_phase0_browser_assist(flow, page_url: str, *, force: bool = False, html:
                     load_roxy_capture_config,
                 )
                 # open/capture roxy browser first
-                cap = capture_roxy_runtime_profile(proxy_url=proxy_url, seed_profile=profile)
+                cap = capture_roxy_runtime_profile(proxy_url=proxy_url)
                 roxy_browser = None
                 if isinstance(cap, dict):
                     roxy_browser = cap.get("roxy_browser") or cap

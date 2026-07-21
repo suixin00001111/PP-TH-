@@ -50,6 +50,7 @@ class SessionState:
     d_id: str = ""
     user_id: str = ""
     datadome_cookie: str = ""
+    datadome_clientid: str = ""
     tltsid: str = ""
     tltdid: str = ""
     paypal_client_metadata_id: str = field(default_factory=lambda: str(uuid.uuid4()))
