@@ -1,3 +1,5 @@
 ﻿# Optional: Playwright for headless fingerprint / DataDome / MTR
-# After install: python -m playwright install chromium
+# Install:
+#   pip install -r requirements-headless.txt
+#   python -m playwright install chromium
 playwright>=1.40.0

@@ -247,3 +247,55 @@ SMSBOWER_COUNTRY_MAP_JSON={"JP":"182","TH":"52"}
 3. 重试协议页加载；仍失败再按重试策略回退  
 
 纯 `protocol` 模式不启浏览器（与默认一致）。
+
+---
+
+## 浏览器运行时安装与使用
+
+### Playwright Headless
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-headless.txt
+.\.venv\Scripts\python.exe -m playwright install chromium
+```
+
+验证（应打印 Chromium 版本）：
+
+```powershell
+.\.venv\Scripts\python.exe -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True); print(b.version); b.close(); p.stop()"
+```
+
+### RoxyBrowser（可选，需本机客户端）
+
+1. 安装并启动 RoxyBrowser，开启 Local API（默认端口常为 50000）  
+2. 配置环境变量（勿提交密钥）：
+
+```powershell
+$env:PAYPAL_ROXY_API_KEY = "your_key"
+$env:PAYPAL_ROXY_API_HOST = "127.0.0.1"
+$env:PAYPAL_ROXY_API_PORT = "50000"
+$env:PAYPAL_RUNTIME_MODE = "auto"
+```
+
+### 运行时选择
+
+| 模式 | 行为 |
+|------|------|
+| `protocol` | 纯 HTTP（默认） |
+| `headless` | Playwright 无头辅助 Phase0/1 |
+| `auto` | 有 Roxy Key 优先 Roxy，否则 headless，失败回退 protocol |
+
+Web 表单「运行时」下拉；CLI：`--runtime protocol|headless|auto`
+
+```powershell
+.\.venv\Scripts\python.exe main.py --country JP --ba-token BA-xxx --phone +81... --runtime headless
+```
+
+### SMSBower（可选，与手填 OTP 并存）
+
+```powershell
+$env:SMSBOWER_API_KEY = "your_key"
+.\.venv\Scripts\python.exe main.py --country BR --ba-token BA-xxx --smsbower --smsbower-api-key your_key
+```
+
+国家数字 ID 见 `paypal/smsbower_countries.py`。详见 `SETUP.md`。
