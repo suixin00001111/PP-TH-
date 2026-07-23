@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PP Multi · 多国协议控制台</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@400;500;600;700&family=Orbitron:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="bg-glow" aria-hidden="true"></div>
+  <div class="scanlines" aria-hidden="true"></div>
+
+  <div class="shell">
+    <header class="hero">
+      <div class="hero-main">
+        <div class="brand-row">
+          <span class="logo-mark" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+              <path d="M4 8L14 3L24 8V20L14 25L4 20V8Z" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M14 12V18M11 15H17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <p class="eyebrow">PP MULTI // PROTOCOL CONSOLE</p>
+        </div>
+        <h1>PayPal 多国协议控制台</h1>
+<div class="meta-chips" aria-hidden="true">
+          <span class="chip">PHASE 0-4</span>
+          <span class="chip">BA → EC → OTP</span>
+          
+        </div>
+      </div>
+      <div class="hero-side">
+        <button type="button" id="themeToggle" class="theme-toggle" aria-label="切换明暗主题" title="切换明暗主题">
+          <span class="theme-icon theme-icon-sun" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          </span>
+          <span class="theme-icon theme-icon-moon" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"/></svg>
+          </span>
+          <span class="theme-label" id="themeLabel">深色</span>
+        </button>
+        <div class="status-pill" id="serverStatus" role="status">连接中…</div>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="card form-card">
+        <div class="card-corner tl" aria-hidden="true"></div>
+        <div class="card-corner br" aria-hidden="true"></div>
+        <div class="section-title">
+          <div>
+            <p class="sec-kicker">MODULE 01</p>
+            <h2>启动新任务</h2>
+          </div>
+</div>
+        <form id="runForm" autocomplete="off">
+          <label>
+            <span>BA Token</span>
+            <input id="baToken" name="baToken" required placeholder="BA-xxxxxxxxxxxxxxxxx" spellcheck="false" />
+          </label>
+          <label class="country-field">
+            <span>协议国家</span>
+            <div class="country-combo" id="countryCombo">
+              <input type="hidden" id="countrySelect" name="country" value="TH" required />
+              <div class="country-control">
+                <input type="text" id="countrySearch" class="country-search" placeholder="搜索国家中文名或代码" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="countryList" aria-haspopup="listbox" />
+                <button type="button" id="countryToggle" class="country-toggle" aria-label="展开国家列表" tabindex="-1">
+                  <span class="country-chevron" aria-hidden="true"></span>
+                </button>
+              </div>
+              <ul id="countryList" class="country-list" role="listbox" hidden></ul>
+            </div>
+          </label>
+          <label>
+            <span>手机号</span>
+            <input id="phone" name="phone" required placeholder="+66812345678" inputmode="tel" autocomplete="tel" />
+          </label>
+          <label>
+            <span>浏览器指纹来源</span>
+            <select id="fingerprintSource" name="fingerprintSource">
+              <option value="headless" selected>本地 Headless</option>
+              <option value="roxy">Roxy 指纹浏览器</option>
+              <option value="random">程序随机生成</option>
+              <option value="auto">自动：优先 Roxy</option>
+            </select>
+          </label>
+          <label>
+            <span>DataDome 模式</span>
+            <select id="datadomeMode" name="datadomeMode">
+              <option value="headless" selected>本地 Headless</option>
+              <option value="roxy">Roxy 浏览器执行（同 Headless 逻辑）</option>
+              <option value="protocol">协议边缘模拟</option>
+              <option value="auto">自动：Roxy 失败回退</option>
+              <option value="off">关闭</option>
+            </select>
+          </label>
+          <label>
+            <span>MTR sealedResult</span>
+            <select id="mtrRuntime" name="mtrRuntime">
+              <option value="headless" selected>本地 Headless</option>
+              <option value="roxy">Roxy 浏览器执行 dfp.js（同 Headless 逻辑）</option>
+              <option value="python_generated">程序模板生成</option>
+              <option value="auto">自动：Roxy 失败回退</option>
+              <option value="block">严格阻断缺失</option>
+              <option value="off">关闭</option>
+            </select>
+          </label>
+<div id="roxyPanel" class="proxy-panel roxy-panel hidden">
+            <div class="roxy-panel-title">Roxy Local API 配置</div>
+<div class="form-row">
+              <label>
+                <span>API Key</span>
+                <input id="roxyApiKey" name="roxyApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="PAYPAL_ROXY_API_KEY" />
+              </label>
+              <label>
+                <span>API Host</span>
+                <input id="roxyApiHost" name="roxyApiHost" spellcheck="false" autocomplete="off" placeholder="127.0.0.1" value="127.0.0.1" />
+              </label>
+              <label>
+                <span>API Port</span>
+                <input id="roxyApiPort" name="roxyApiPort" type="number" min="1" max="65535" value="50000" />
+              </label>
+            </div>
+            <div class="form-row">
+              <label class="check-row">
+                <input id="roxyHeadless" name="roxyHeadless" type="checkbox" checked />
+                <span>Roxy 无头打开窗口</span>
+              </label>
+              <label>
+                <span>Workspace ID（可选）</span>
+                <input id="roxyWorkspaceId" name="roxyWorkspaceId" spellcheck="false" autocomplete="off" placeholder="留空自动" />
+              </label>
+              <label>
+                <span>Project ID（可选）</span>
+                <input id="roxyProjectId" name="roxyProjectId" spellcheck="false" autocomplete="off" placeholder="留空" />
+              </label>
+            </div>
+            <div class="proxy-actions">
+              <button id="testRoxyBtn" class="ghost" type="button">测试 Roxy 连接</button>
+              <span id="roxyTestResult" class="proxy-test-result" aria-live="polite"></span>
+            </div>
+          </div>
+
+<div class="form-row">
+            <label>
+              <span>最大换卡次数</span>
+              <input id="maxCardAttempts" name="maxCardAttempts" type="number" min="1" max="20" value="5" />
+            </label>
+            <label>
+              <span>整流程重试</span>
+              <input id="maxFlowAttempts" name="maxFlowAttempts" type="number" min="1" max="5" value="1" />
+            </label>
+            <label>
+              <span>授权重试</span>
+              <input id="maxAuthorizeAttempts" name="maxAuthorizeAttempts" type="number" min="1" max="10" value="3" />
+            </label>
+            <label>
+              <span>换卡延迟(秒)</span>
+              <input id="cardRetryDelay" name="cardRetryDelay" type="number" min="0" max="60" step="0.5" value="6" />
+            </label>
+            <label>
+              <span>换卡抖动(秒)</span>
+              <input id="cardRetryJitter" name="cardRetryJitter" type="number" min="0" max="30" step="0.5" value="2" />
+            </label>
+            <label class="check-row">
+              <input id="debug" name="debug" type="checkbox" />
+              <span>显示 DEBUG 日志</span>
+            </label>
+            <label class="check-row">
+              <input id="proxyEnabled" name="proxyEnabled" type="checkbox" checked />
+              <span>启用代理</span>
+            </label>
+          </div>
+          <div class="form-row">
+<label class="check-row">
+              <input id="smsbowerEnabled" name="smsbowerEnabled" type="checkbox" />
+              <span>SMSBower 自动接码</span>
+            </label>
+            <label>
+              <span>SMSBower API Key（可选）</span>
+              <input id="smsbowerApiKey" name="smsbowerApiKey" type="password" autocomplete="off" placeholder="留空则用手填 OTP" />
+            </label>
+          </div>
+          <div id="proxyPanel" class="proxy-panel">
+<label id="proxyRawWrap">
+              <span>代理信息</span>
+              <input id="proxyRaw" name="proxyRaw" spellcheck="false" autocomplete="off"
+                placeholder="user:pass@host:port 或 http://user:pass@host:port" />
+            </label>
+            <div class="proxy-actions">
+              <button id="testProxyBtn" class="ghost" type="button">测试代理</button>
+              <span id="proxyTestResult" class="proxy-test-result" aria-live="polite"></span>
+            </div>
+</div>
+          <button id="startBtn" class="primary" type="submit">
+            <span class="btn-glow" aria-hidden="true"></span>
+            <span>开始执行</span>
+          </button>
+        </form>
+
+
+
+</section>
+
+      <section class="card jobs-card">
+        <div class="card-corner tl" aria-hidden="true"></div>
+        <div class="card-corner br" aria-hidden="true"></div>
+        <div class="section-title">
+          <div>
+            <p class="sec-kicker">MODULE 02</p>
+            <h2>任务列表</h2>
+          </div>
+          <button id="refreshJobs" class="ghost" type="button">刷新</button>
+        </div>
+        <div id="jobsList" class="jobs-list empty">暂无任务</div>
+      </section>
+
+      <section class="card current-card span-2">
+        <div class="card-corner tl" aria-hidden="true"></div>
+        <div class="card-corner br" aria-hidden="true"></div>
+        <div class="section-title">
+          <div>
+            <p class="sec-kicker">MODULE 03</p>
+            <h2>当前任务</h2>
+            <span id="currentMeta" class="sec-hint">未选择任务</span>
+          </div>
+          <div class="toolbar">
+            <button id="copyResult" class="ghost" type="button" disabled>复制结果</button>
+            <button id="clearCurrent" class="ghost" type="button">清空选择</button>
+          </div>
+        </div>
+
+        <div id="currentEmpty" class="empty-state">启动或选择一个任务后，这里会显示进度、验证码输入、生成资料与执行结果。</div>
+
+        <div id="currentBody" class="current-body hidden">
+          <div class="progress-line">
+            <div>
+              <div id="jobStatus" class="job-status">queued</div>
+              <div id="jobStage" class="job-stage">排队中</div>
+            </div>
+            <div id="jobDuration" class="duration">0s</div>
+          </div>
+
+          <div id="otpPanel" class="otp-panel hidden">
+            <div>
+              <h3>需要输入验证码 / 新手机号</h3>
+              <p id="otpPrompt"></p>
+            </div>
+            <form id="otpForm" class="otp-form" autocomplete="off">
+              <input id="otpValue" placeholder="6位验证码或新手机号；q 退出" />
+              <button class="primary" type="submit">提交</button>
+            </form>
+          </div>
+
+          <div class="details-grid">
+            <div>
+              <h3>生成资料</h3>
+              <pre id="generatedBox" class="json-box">{}</pre>
+            </div>
+            <div>
+              <h3>结果</h3>
+              <pre id="resultBox" class="json-box">{}</pre>
+            </div>
+          </div>
+
+          <div class="logs-head">
+            <h3>实时日志</h3>
+            <label class="check-row small"><input id="autoScroll" type="checkbox" checked />自动滚动</label>
+          </div>
+          <pre id="logsBox" class="logs-box"></pre>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot"><span>PP MULTI CONSOLE</span></footer>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
