@@ -164,6 +164,7 @@ class PayPalFlow:
         traffic_record: bool | None = None,
         smsbower_enabled: bool | None = None,
         smsbower_api_key: str | None = None,
+        buyer_identity_mode: str | None = None,
         **kwargs,
     ):
         self.ba_token = ba_token
@@ -186,6 +187,11 @@ class PayPalFlow:
         self.mtr_runtime = mtr_runtime
         self.risk_signals_mode = risk_signals_mode
         self.sms_provider = sms_provider
+        # legacy: Phase3 signup then Phase4 (Hagrid inside authorize)
+        # elevate_bind: after signup, elevate Guest + bind EC, then authorize
+        raw_mode = buyer_identity_mode if buyer_identity_mode is not None else kwargs.get("buyer_identity_mode")
+        self.buyer_identity_mode = self._normalize_buyer_identity_mode(raw_mode)
+        self._buyer_context_bound = False
         # --- Multi-country protocol binding (TH/JP/... + Brazil-depth runtime) ---
         try:
             self.runtime_resolved = resolve_and_apply(
@@ -2244,7 +2250,19 @@ class PayPalFlow:
                     self._phase0_initial_load()
                     self._phase2_create_account()
                     self._phase3_signup_and_2fa()
-                    result = self._with_risk_runtime_report(self._phase4_authorize())
+                    if self.buyer_identity_mode == "elevate_bind":
+                        logger.info(
+                            "Buyer identity mode: elevate_bind "
+                            "(Guest elevate -> bind EC -> authorize)"
+                        )
+                        self._elevate_guest_identity()
+                        self._bind_buyer_to_current_ec()
+                        result = self._with_risk_runtime_report(
+                            self._phase4_authorize(skip_initial_hagrid=True)
+                        )
+                    else:
+                        logger.info("Buyer identity mode: legacy (Phase4 binds buyer)")
+                        result = self._with_risk_runtime_report(self._phase4_authorize())
                 except Exception as attempt_error:
                     if (
                         self._should_retry_full_flow_exception(attempt_error)
@@ -2359,6 +2377,7 @@ class PayPalFlow:
         self.card = generate_card(proxy_url=self.proxy_config.url)
         self.address = current_address
         self.state = SessionState(ba_token=self.ba_token)
+        self._buyer_context_bound = False
         ensure_runtime_profile(
             self.state,
             source=self.fingerprint_source,
@@ -7472,7 +7491,155 @@ class PayPalFlow:
                 result.append(value)
         return result or [self.state.paypal_client_metadata_id]
 
-    def _phase4_authorize(self) -> dict[str, object]:
+    @staticmethod
+    def _normalize_buyer_identity_mode(raw: object) -> str:
+        value = str(raw or "legacy").strip().lower().replace("-", "_").replace(" ", "_")
+        if value in {"", "legacy", "original", "default", "classic", "v1", "phase4"}:
+            return "legacy"
+        if value in {
+            "elevate_bind",
+            "guest_elevate",
+            "bind_ec",
+            "elevate",
+            "guest_bind",
+            "bind",
+            "v2",
+            "elevate_guest_bind_ec",
+        }:
+            return "elevate_bind"
+        logger.warning(
+            "Unknown buyer_identity_mode={!r}; falling back to legacy",
+            raw,
+        )
+        return "legacy"
+
+    def _elevate_guest_identity(self) -> None:
+        """After SignUpNewMember, promote Guest into a member session via EUAT."""
+        logger.info("--- Buyer identity: elevate Guest ---")
+        if not self.state.euat_token:
+            raise RuntimeError(
+                "Cannot elevate Guest: no EUAT/access token after SignUpNewMember"
+            )
+        self._ensure_euat_cookie()
+        # Reinforce member-session analytics already started at Phase3 end.
+        try:
+            send_analytics_ts(
+                self.session,
+                "main:billing:hagrid:billingwithoutpurchase:member:review",
+                self.ba_token,
+                ec_token=self.state.ec_token,
+                user_id=self.state.user_id,
+            )
+        except Exception as exc:
+            logger.debug("elevate Guest analytics skipped: {}", exc)
+        logger.info(
+            "Guest elevated: euat_present={} user_id_present={} ec_present={}",
+            bool(self.state.euat_token),
+            bool(self.state.user_id),
+            bool(self.state.ec_token),
+        )
+
+    def _bind_buyer_to_current_ec(self) -> None:
+        """Bind the elevated member session to the current EC via Hermes/Hagrid."""
+        logger.info("--- Buyer identity: bind buyer to current EC ---")
+        if not self._is_ec_token(self.state.ec_token):
+            raise RuntimeError(
+                "Cannot bind buyer to EC: missing valid EC checkout token"
+            )
+        if not self.state.euat_token:
+            raise RuntimeError(
+                "Cannot bind buyer to EC: missing EUAT after Guest elevate"
+            )
+
+        self._ensure_euat_cookie()
+        hermes_base_url = self._hermes_url()
+        hermes_contingency_url = self._hermes_url(add_fi_contingency=True)
+        review_referer = self._hermes_url(billing_lite=True)
+        review_url = f"{review_referer}#/billingweb/review"
+
+        hagrid_ok = self._load_hagrid_review_context(
+            hermes_base_url,
+            hermes_contingency_url,
+            review_referer,
+        )
+
+        checkout_ok = False
+        buyer_hint = ""
+        try:
+            checkout_result = self.session.graphql(
+                "CheckoutSessionDataQuery",
+                CHECKOUT_SESSION_DATA_QUERY,
+                {"token": self.state.ec_token or self.ba_token},
+            )
+            checkout_ok = True
+            buyer_hint = self._extract_buyer_hint_from_checkout(checkout_result)
+            if buyer_hint and not self.state.user_id:
+                self.state.user_id = buyer_hint
+                logger.info("Buyer userId from CheckoutSession: {}", buyer_hint)
+        except Exception as exc:
+            logger.warning("CheckoutSessionDataQuery during EC bind failed: {}", exc)
+
+        try:
+            self._send_tealeaf_data(self.session, review_url)
+        except Exception as exc:
+            logger.debug("bind EC tealeaf skipped: {}", exc)
+
+        self._buyer_context_bound = bool(hagrid_ok or checkout_ok or self.state.user_id)
+        logger.info(
+            "Buyer/EC bind complete: hagrid_ok={} checkout_ok={} "
+            "user_id_present={} buyer_context_bound={}",
+            hagrid_ok,
+            checkout_ok,
+            bool(self.state.user_id),
+            self._buyer_context_bound,
+        )
+        if not self._buyer_context_bound:
+            logger.warning(
+                "Buyer may still be unbound on EC; Phase4 authorize will retry "
+                "on BUYER_NOT_SET"
+            )
+
+    @staticmethod
+    def _extract_buyer_hint_from_checkout(result: object) -> str:
+        """Best-effort extract buyer/userId from CheckoutSessionDataQuery payload."""
+        items = result if isinstance(result, list) else [result]
+        keys = ("userId", "user_id", "buyerId", "buyer_id", "accountId")
+
+        def walk(node: object) -> str:
+            if isinstance(node, dict):
+                buyer = node.get("buyer")
+                if isinstance(buyer, dict):
+                    for key in keys:
+                        value = buyer.get(key)
+                        if value:
+                            return str(value)
+                for key in keys:
+                    value = node.get(key)
+                    if value and key.lower().endswith("id"):
+                        text = str(value)
+                        if len(text) >= 8:
+                            return text
+                for value in node.values():
+                    found = walk(value)
+                    if found:
+                        return found
+            elif isinstance(node, list):
+                for value in node:
+                    found = walk(value)
+                    if found:
+                        return found
+            return ""
+
+        for item in items:
+            found = walk(item)
+            if found:
+                return found
+        return ""
+
+    def _phase4_authorize(
+        self,
+        skip_initial_hagrid: bool | None = None,
+    ) -> dict[str, object]:
         """Send the final authorize mutation to approve the billing agreement."""
         logger.info("--- Phase 4: Final authorization ---")
 
@@ -7484,14 +7651,23 @@ class PayPalFlow:
         review_referer = self._hermes_url(billing_lite=True)
         review_url = f"{review_referer}#/billingweb/review"
 
+        if skip_initial_hagrid is None:
+            skip_initial_hagrid = bool(getattr(self, "_buyer_context_bound", False))
+
         # Browser trace shows that Hagrid/Hermes is actually loaded before the
         # authorize mutation. This binds EUAT/cookies to a buyer context; without
         # it GraphQL authorize can return BUYER_NOT_SET.
-        self._load_hagrid_review_context(
-            hermes_base_url,
-            hermes_contingency_url,
-            review_referer,
-        )
+        if skip_initial_hagrid:
+            logger.info(
+                "Skipping initial Hagrid load (buyer already bound via elevate_bind)"
+            )
+            self._ensure_euat_cookie()
+        else:
+            self._load_hagrid_review_context(
+                hermes_base_url,
+                hermes_contingency_url,
+                review_referer,
+            )
 
         # Send Tealeaf for the review page
         self._send_tealeaf_data(self.session, review_url)

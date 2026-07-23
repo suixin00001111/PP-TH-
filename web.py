@@ -83,6 +83,13 @@ MTR_RUNTIME_CHOICES = {
     "python_generated", "python", "protocol", "roxy", "browser", "headless",
     "local_headless", "playwright", "local_playwright", "auto", "block", "off",
 }
+BUYER_IDENTITY_MODE_CHOICES = {
+    "legacy", "original", "default", "classic", "v1", "phase4",
+    "elevate_bind", "guest_elevate", "bind_ec", "elevate", "guest_bind", "bind", "v2",
+    "elevate_guest_bind_ec",
+}
+
+
 RISK_SIGNALS_MODE_CHOICES = {
     "protocol", "python", "synthetic", "template", "roxy", "browser", "headless",
     "local_headless", "playwright", "local_playwright", "auto", "off",
@@ -381,6 +388,25 @@ def mask_phone(value: str) -> str:
     return mask_digits(value, keep=4)
 
 
+def phone_input_hint(country: str, current_phone: str = "") -> str:
+    """OTP/phone prompt without full phone digits (avoids redact_text masking examples)."""
+    try:
+        region = get_region(country)
+        cc = str(getattr(region, "phone_cc", "") or "").strip()
+    except Exception:
+        cc = ""
+    if cc and not str(cc).startswith("+"):
+        cc = f"+{cc}"
+    current = mask_phone(current_phone) if current_phone else ""
+    if current:
+        return (
+            f"当前号码 {current}。"
+            f"请填【另一号码】：国家码 {cc or '+??'} + 本地号"
+            f"（不要默认再填同一号码，除非确认该号可用）"
+        )
+    return f"格式：国家码 {cc or '+??'} + 本地号"
+
+
 def redact_text(value: Any) -> str:
     """Best-effort redaction for logs/UI errors. Keep status information, hide secrets/PII."""
     text = str(value or "")
@@ -674,6 +700,7 @@ class WebJob:
     datadome_mode: str = "headless"
     mtr_runtime: str = "headless"
     risk_signals_mode: str = "headless"
+    buyer_identity_mode: str = "legacy"
     continue_merchant: bool = False
     smsbower_enabled: bool = False
     _smsbower_api_key: str = ""
@@ -842,6 +869,7 @@ class WebJob:
             "datadome_mode": getattr(self, "datadome_mode", "auto"),
             "mtr_runtime": getattr(self, "mtr_runtime", "auto"),
             "risk_signals_mode": getattr(self, "risk_signals_mode", "auto"),
+            "buyer_identity_mode": getattr(self, "buyer_identity_mode", "legacy"),
             "continue_merchant": bool(getattr(self, "continue_merchant", False)),
                 "smsbower_enabled": self.smsbower_enabled,
                 "debug": self.debug and ALLOW_DEBUG_LOGS,
@@ -921,7 +949,7 @@ class WebPayPalFlow(PayPalFlow):
         self.job.set_status("running", stage)
 
     def _phase0_initial_load(self):
-        self._set_stage("Phase 0：打开协议页")
+        self._set_stage("Phase 0：加载协议页")
         return super()._phase0_initial_load()
 
     def _phase1_risk_controls(self):
@@ -932,16 +960,25 @@ class WebPayPalFlow(PayPalFlow):
         return None
 
     def _phase2_create_account(self):
-        self._set_stage("Phase 2：进入创建账号流程")
+        self._set_stage("Phase 2：进入创建账户流程")
         return super()._phase2_create_account()
 
     def _phase3_signup_and_2fa(self):
         self._set_stage("Phase 3：短信验证与注册")
         return super()._phase3_signup_and_2fa()
 
-    def _phase4_authorize(self):
-        self._set_stage("Phase 4：最终授权")
-        return super()._phase4_authorize()
+    def _elevate_guest_identity(self):
+        self._set_stage("Buyer：提升 Guest 身份")
+        return super()._elevate_guest_identity()
+
+    def _bind_buyer_to_current_ec(self):
+        self._set_stage("Buyer：绑定当前 EC")
+        return super()._bind_buyer_to_current_ec()
+
+    def _phase4_authorize(self, *args, **kwargs):
+        self._set_stage("Phase 4：提交授权")
+        return super()._phase4_authorize(*args, **kwargs)
+
 
 
     def _on_full_retry_generated(self, flow_attempt: int):
@@ -971,12 +1008,18 @@ class WebPayPalFlow(PayPalFlow):
                 logger.error("Failed to initiate OTP for {}: {}", self._masked_phone(), e)
                 while True:
                     value = self._prompt_operator(
-                        f"发送验证码失败。请输入新的手机号重新发送（如 {get_region(self.job.country).phone_placeholder}）；输入 q 退出。"
+                        f"发送验证码失败。请输入【新的】手机号重新发送（{phone_input_hint(self.job.country, getattr(self.user, "phone", ""))}）；输入 q 退出。"
                     )
                     if value.lower() in {"q", "quit", "exit"}:
                         raise RuntimeError("OTP confirmation cancelled by user") from e
                     try:
+                        previous = str(getattr(self.user, "phone", "") or "")
                         self._update_user_phone(value)
+                        if previous and str(getattr(self.user, "phone", "") or "") == previous:
+                            logger.warning(
+                                "你提交的手机号与刚才相同（{}）；仍会重试发送，建议换一个同国可用号码。",
+                                self._masked_phone(),
+                            )
                         break
                     except ValueError as phone_error:
                         logger.warning("手机号无效：{}。请重新输入。", phone_error)
@@ -1029,7 +1072,7 @@ class WebPayPalFlow(PayPalFlow):
 
             while True:
                 value = self._prompt_operator(
-                    f"请输入6位短信验证码；如需换号，输入新手机号（如 {get_region(self.job.country).phone_placeholder}）；输入 q 退出。"
+                    f"请输入6位短信验证码；如需换号，输入【新的】手机号（{phone_input_hint(self.job.country, getattr(self.user, "phone", ""))}）；输入 q 退出。"
                 )
 
                 if value.lower() in {"q", "quit", "exit"}:
@@ -1116,6 +1159,7 @@ def create_job(
     mtr_runtime: str = "headless",
     risk_signals_mode: str = "",
     continue_merchant: bool = False,
+    buyer_identity_mode: str = "legacy",
     smsbower_enabled: bool = False,
     smsbower_api_key: str = "",
 ) -> WebJob:
@@ -1142,6 +1186,15 @@ def create_job(
     if mtr_runtime not in MTR_RUNTIME_CHOICES:
         raise ValueError(f"unsupported mtr_runtime: {mtr_runtime}")
 
+    buyer_identity_mode = str(buyer_identity_mode or "legacy").strip().lower().replace("-", "_").replace(" ", "_")
+    if buyer_identity_mode in {"", "original", "default", "classic", "v1", "phase4"}:
+        buyer_identity_mode = "legacy"
+    elif buyer_identity_mode in {
+        "guest_elevate", "bind_ec", "elevate", "guest_bind", "bind", "v2", "elevate_guest_bind_ec",
+    }:
+        buyer_identity_mode = "elevate_bind"
+    elif buyer_identity_mode not in {"legacy", "elevate_bind"}:
+        raise ValueError(f"unsupported buyer_identity_mode: {buyer_identity_mode}")
 
     roxy_api_key = (roxy_api_key or "").strip()
     roxy_api_host = (roxy_api_host or "127.0.0.1").strip() or "127.0.0.1"
@@ -1260,6 +1313,7 @@ def create_job(
         datadome_mode=datadome_mode,
         mtr_runtime=mtr_runtime,
         risk_signals_mode=risk_signals_mode,
+        buyer_identity_mode=buyer_identity_mode,
         continue_merchant=continue_merchant,
         smsbower_enabled=smsbower_enabled,
         _smsbower_api_key=smsbower_api_key,
@@ -1383,10 +1437,11 @@ def run_job(job: WebJob) -> None:
             )
 
             logger.info(
-                "Runtime modes: fingerprint={} datadome={} mtr={}",
+                "Runtime modes: fingerprint={} datadome={} mtr={} buyer={}",
                 getattr(job, "fingerprint_source", ""),
                 getattr(job, "datadome_mode", ""),
                 getattr(job, "mtr_runtime", ""),
+                getattr(job, "buyer_identity_mode", "legacy"),
             )
 
             flow = WebPayPalFlow(
@@ -1406,6 +1461,7 @@ def run_job(job: WebJob) -> None:
                 datadome_mode=getattr(job, "datadome_mode", "headless"),
                 mtr_runtime=getattr(job, "mtr_runtime", "headless"),
                 risk_signals_mode=getattr(job, "risk_signals_mode", "headless"),
+                buyer_identity_mode=getattr(job, "buyer_identity_mode", "legacy"),
                 continue_merchant=False,
                 smsbower_enabled=getattr(job, "smsbower_enabled", False),
                 smsbower_api_key=getattr(job, "_smsbower_api_key", ""),
@@ -1433,6 +1489,7 @@ def run_job(job: WebJob) -> None:
                     "datadome_mode": getattr(job, "datadome_mode", "auto"),
                     "mtr_runtime": getattr(job, "mtr_runtime", "auto"),
                     "risk_signals_mode": getattr(job, "risk_signals_mode", "auto"),
+                    "buyer_identity_mode": getattr(job, "buyer_identity_mode", "legacy"),
                     "continue_merchant": cont,
                 }
                 if cont and str(result.get("status") or "").lower() in {"success", "ok", "completed", "authorized"}:
@@ -1565,6 +1622,10 @@ class WebHandler(BaseHTTPRequestHandler):
                 "fingerprint_sources": ["headless", "roxy", "random", "auto"],
                 "datadome_modes": ["headless", "roxy", "protocol", "auto", "off"],
                 "mtr_runtimes": ["headless", "roxy", "python_generated", "auto", "block", "off"],
+                "buyer_identity_modes": [
+                    {"value": "legacy", "label": "原版流程"},
+                    {"value": "elevate_bind", "label": "注册后升 Guest、绑 EC 再授权"},
+                ],
                 "notes": [
                     "Aligned with openai-paypal Web: three fine knobs, default headless",
                     "Roxy optional when Local API + key available",
@@ -1675,6 +1736,12 @@ class WebHandler(BaseHTTPRequestHandler):
                     datadome_mode=datadome_mode,
                     mtr_runtime=mtr_runtime,
                     risk_signals_mode=str(data.get("risk_signals_mode") or ""),
+                    buyer_identity_mode=str(
+                        data.get("buyer_identity_mode")
+                        or data.get("identity_mode")
+                        or data.get("buyer_mode")
+                        or "legacy"
+                    ),
                     smsbower_enabled=bool(data.get("smsbower_enabled") or data.get("smsbower") or False),
                     smsbower_api_key=str(data.get("smsbower_api_key") or ""),
                 )

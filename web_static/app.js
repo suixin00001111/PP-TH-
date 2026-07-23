@@ -519,11 +519,20 @@ async function testRoxy() {
   }
 }
 
+function normalizeBuyerIdentityMode(value) {
+  const v = String(value || "legacy").trim().toLowerCase().replace(/-/g, "_");
+  if (["elevate_bind", "guest_elevate", "bind_ec", "elevate", "guest_bind", "bind", "v2"].includes(v)) {
+    return "elevate_bind";
+  }
+  return "legacy";
+}
+
 function getRuntimePayload() {
   return {
     fingerprint_source: normalizeFingerprintSource($("#fingerprintSource")?.value || "headless"),
     datadome_mode: normalizeDatadomeMode($("#datadomeMode")?.value || "headless"),
     mtr_runtime: normalizeMtrRuntime($("#mtrRuntime")?.value || "headless"),
+    buyer_identity_mode: normalizeBuyerIdentityMode($("#buyerIdentityMode")?.value || "legacy"),
   };
 }
 
@@ -722,7 +731,8 @@ function renderLogs(logs) {
 function renderCurrent(job) {
   $("#currentEmpty").classList.add("hidden");
   $("#currentBody").classList.remove("hidden");
-  const runtimeMeta = ` · FP:${job.fingerprint_source || "-"} · DD:${job.datadome_mode || "-"} · MTR:${job.mtr_runtime || "-"}`;
+  const buyerLabel = (job.buyer_identity_mode === "elevate_bind") ? "升Guest绑EC" : "原版";
+  const runtimeMeta = ` · FP:${job.fingerprint_source || "-"} · DD:${job.datadome_mode || "-"} · MTR:${job.mtr_runtime || "-"} · Buyer:${buyerLabel}`;
   $("#currentMeta").textContent = `#${job.id} · 创建于 ${fmtTime(job.created_at)} · ${job.proxy_label || "代理关闭"}${runtimeMeta}`;
   $("#jobStatus").textContent = job.status;
   $("#jobStage").textContent = job.stage || "";
@@ -732,9 +742,26 @@ function renderCurrent(job) {
   $("#copyResult").disabled = !(job.result || job.error);
 
   const otpPanel = $("#otpPanel");
-  otpPanel.classList.toggle("hidden", !job.awaiting_otp);
-  $("#otpPrompt").textContent = job.awaiting_prompt || "请输入短信验证码或新手机号。";
-  if (job.awaiting_otp) $("#otpValue").focus();
+  const wasAwaiting = !otpPanel.classList.contains("hidden");
+  const nowAwaiting = !!job.awaiting_otp;
+  otpPanel.classList.toggle("hidden", !nowAwaiting);
+  $("#otpPrompt").textContent = job.awaiting_prompt || "请输入短信验证码，或输入【新的】手机号重新发送。";
+  if (nowAwaiting) {
+    // 首次进入等待态时清空，避免浏览器把上方手机号自动填进验证码框
+    if (!wasAwaiting) {
+      $("#otpValue").value = "";
+    }
+    const otpInput = $("#otpValue");
+    if (otpInput) {
+      otpInput.setAttribute("autocomplete", "one-time-code");
+      otpInput.setAttribute("name", "paypal_otp_or_new_phone");
+      otpInput.setAttribute("inputmode", "text");
+      otpInput.setAttribute("autocapitalize", "off");
+      otpInput.setAttribute("autocorrect", "off");
+      otpInput.setAttribute("spellcheck", "false");
+    }
+    $("#otpValue").focus();
+  }
 
   renderLogs(job.logs || []);
 }

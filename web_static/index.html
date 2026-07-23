@@ -109,6 +109,14 @@
               <option value="off">关闭</option>
             </select>
           </label>
+          <label>
+            <span>Buyer 身份模式</span>
+            <select id="buyerIdentityMode" name="buyerIdentityMode">
+              <option value="legacy" selected>原版流程</option>
+              <option value="elevate_bind">注册后升 Guest、绑 EC 再授权</option>
+            </select>
+          </label>
+
 <div id="roxyPanel" class="proxy-panel roxy-panel hidden">
             <div class="roxy-panel-title">Roxy Local API 配置</div>
 <div class="form-row">
@@ -251,7 +259,7 @@
               <p id="otpPrompt"></p>
             </div>
             <form id="otpForm" class="otp-form" autocomplete="off">
-              <input id="otpValue" placeholder="6位验证码或新手机号；q 退出" />
+              <input id="otpValue" name="paypal_otp_or_new_phone" type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" placeholder="6位验证码，或【新的】手机号；q 退出" />
               <button class="primary" type="submit">提交</button>
             </form>
           </div>
