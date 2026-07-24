@@ -36,18 +36,27 @@ RUNTIME_MODE = "protocol"
 
 # Fine risk modes (openai-paypal compatible).
 # When RUNTIME_MODE is set, runtime_config maps coarse->fine unless env overrides.
-FINGERPRINT_SOURCE = "random"    # random | headless | roxy | auto
-# Peer openai-paypal local success path uses protocol DataDome (no fingerprint browser).
-DATADOME_MODE = "protocol"       # protocol | headless | roxy | auto | off
+# 浏览器指纹来源（巴西 openai-paypal 同款）：
+#   random   = 程序内合成 UA/canvas/WebGL 等（纯协议，不弹浏览器）
+#   headless = 本机 Playwright 读真实 runtime
+#   roxy     = Roxy 指纹浏览器读真实 runtime
+FINGERPRINT_SOURCE = "random"
+# DataDome：
+#   protocol = 协议边缘模拟（纯协议）
+#   headless / roxy = 浏览器执行 challenge
+DATADOME_MODE = "protocol"
 DATADOME_ROXY_WAIT_SECONDS = 12.0
 DATADOME_HEADLESS_WAIT_SECONDS = 14.0
-MTR_RUNTIME_MODE = "python_generated"  # python_generated | headless | roxy | auto | off
+# MTR sealedResult：
+#   python_generated = 程序模板生成（纯协议）
+#   headless / roxy = 浏览器执行 dfp.js
+MTR_RUNTIME_MODE = "python_generated"
 MTR_ROXY_WAIT_SECONDS = 20.0
 MTR_HEADLESS_WAIT_SECONDS = 20.0
 MTR_CHANNEL = "iwc-mxo"
 MTR_API_KEY = ""
-# Local peer-aligned default: pure protocol risk (no fingerprint browser).
-RISK_SIGNALS_MODE = "protocol"   # protocol | headless | roxy | auto
+# 风控信号：与上三项配套，纯协议默认 protocol
+RISK_SIGNALS_MODE = "protocol"
 RISK_ROXY_WAIT_SECONDS = 18.0
 RISK_HEADLESS_WAIT_SECONDS = 12.0
 

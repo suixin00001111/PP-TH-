@@ -85,33 +85,28 @@
           <label>
             <span>浏览器指纹来源</span>
             <select id="fingerprintSource" name="fingerprintSource">
-              <option value="headless">本地 Headless</option>
+              <option value="random" selected>程序随机生成（纯协议，推荐）</option>
+              <option value="headless">本地 Headless（Playwright）</option>
               <option value="roxy">Roxy 指纹浏览器</option>
-              <option value="random" selected>程序随机生成</option>
-              <option value="auto">自动：优先 Roxy</option>
             </select>
           </label>
           <label>
             <span>DataDome 模式</span>
             <select id="datadomeMode" name="datadomeMode">
-              <option value="headless">本地 Headless</option>
-              <option value="roxy">Roxy 浏览器执行（同 Headless 逻辑）</option>
-              <option value="protocol" selected>协议边缘模拟</option>
-              <option value="auto">自动：Roxy 失败回退</option>
-              <option value="off">关闭</option>
+              <option value="protocol" selected>协议边缘模拟（纯协议，推荐）</option>
+              <option value="headless">本地 Headless（Playwright）</option>
+              <option value="roxy">Roxy 浏览器执行</option>
             </select>
           </label>
           <label>
             <span>MTR sealedResult</span>
             <select id="mtrRuntime" name="mtrRuntime">
-              <option value="headless">本地 Headless</option>
-              <option value="roxy">Roxy 浏览器执行 dfp.js（同 Headless 逻辑）</option>
-              <option value="python_generated" selected>程序模板生成</option>
-              <option value="auto">自动：Roxy 失败回退</option>
-              <option value="block">严格阻断缺失</option>
-              <option value="off">关闭</option>
+              <option value="python_generated" selected>程序模板生成（纯协议，推荐）</option>
+              <option value="headless">本地 Headless（Playwright）</option>
+              <option value="roxy">Roxy 浏览器执行</option>
             </select>
           </label>
+          <p class="field-hint">巴西脚本同款三项：纯协议=随机指纹+协议DD+模板MTR，不弹浏览器；选 Headless/Roxy 才会开浏览器。</p>
           <label>
             <span>Buyer 身份模式</span>
             <select id="buyerIdentityMode" name="buyerIdentityMode">

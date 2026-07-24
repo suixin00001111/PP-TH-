@@ -892,10 +892,10 @@ class WebJob:
                 "roxy_api_host": getattr(self, "roxy_api_host", "127.0.0.1"),
                 "roxy_api_port": getattr(self, "roxy_api_port", 50000),
                 "roxy_headless": bool(getattr(self, "roxy_headless", True)),
-                "fingerprint_source": getattr(self, "fingerprint_source", "auto"),
-            "datadome_mode": getattr(self, "datadome_mode", "auto"),
-            "mtr_runtime": getattr(self, "mtr_runtime", "auto"),
-            "risk_signals_mode": getattr(self, "risk_signals_mode", "auto"),
+                "fingerprint_source": getattr(self, "fingerprint_source", "random"),
+            "datadome_mode": getattr(self, "datadome_mode", "protocol"),
+            "mtr_runtime": getattr(self, "mtr_runtime", "python_generated"),
+            "risk_signals_mode": getattr(self, "risk_signals_mode", "protocol"),
             "buyer_identity_mode": getattr(self, "buyer_identity_mode", "legacy"),
             "continue_merchant": bool(getattr(self, "continue_merchant", False)),
                 "smsbower_enabled": self.smsbower_enabled,
@@ -1324,7 +1324,7 @@ def create_job(
     profile = "real"  # Web UI is real-run only (no test/smoke profile)
     continue_merchant = False  # A-layer only (aligned with openai-paypal; no B/C switch)
 
-    # Brazil-style fine knobs (defaults headless; protocol allowed on DataDome)
+    # Pure-protocol fine knobs (Brazil config success path: random/protocol/python_generated)
     fingerprint_source = str(fingerprint_source or "random").strip().lower().replace("-", "_")
     datadome_mode = str(datadome_mode or "protocol").strip().lower().replace("-", "_")
     mtr_runtime = str(mtr_runtime or "python_generated").strip().lower().replace("-", "_")
@@ -1614,12 +1614,12 @@ def run_job(job: WebJob) -> None:
                 card_retry_delay_seconds=getattr(job, "card_retry_delay_seconds", 6.0),
                 card_retry_jitter_seconds=getattr(job, "card_retry_jitter_seconds", 2.0),
                 proxy_config=proxy_config,
-                runtime_mode=getattr(job, "runtime_mode", "headless"),
+                runtime_mode=getattr(job, "runtime_mode", "protocol"),
                 profile=getattr(job, "profile", "real"),
-                fingerprint_source=getattr(job, "fingerprint_source", "headless"),
-                datadome_mode=getattr(job, "datadome_mode", "headless"),
-                mtr_runtime=getattr(job, "mtr_runtime", "headless"),
-                risk_signals_mode=getattr(job, "risk_signals_mode", "headless"),
+                fingerprint_source=getattr(job, "fingerprint_source", "random"),
+                datadome_mode=getattr(job, "datadome_mode", "protocol"),
+                mtr_runtime=getattr(job, "mtr_runtime", "python_generated"),
+                risk_signals_mode=getattr(job, "risk_signals_mode", "protocol"),
                 buyer_identity_mode=getattr(job, "buyer_identity_mode", "legacy"),
                 continue_merchant=False,
                 smsbower_enabled=getattr(job, "smsbower_enabled", False),
@@ -1646,11 +1646,11 @@ def run_job(job: WebJob) -> None:
                 cont = bool(getattr(job, "continue_merchant", False))
                 result["runtime"] = {
                     "profile": getattr(job, "profile", "real"),
-                    "runtime_mode": getattr(job, "runtime_mode", "auto"),
-                    "fingerprint_source": getattr(job, "fingerprint_source", "auto"),
-                    "datadome_mode": getattr(job, "datadome_mode", "auto"),
-                    "mtr_runtime": getattr(job, "mtr_runtime", "auto"),
-                    "risk_signals_mode": getattr(job, "risk_signals_mode", "auto"),
+                    "runtime_mode": getattr(job, "runtime_mode", "protocol"),
+                    "fingerprint_source": getattr(job, "fingerprint_source", "random"),
+                    "datadome_mode": getattr(job, "datadome_mode", "protocol"),
+                    "mtr_runtime": getattr(job, "mtr_runtime", "python_generated"),
+                    "risk_signals_mode": getattr(job, "risk_signals_mode", "protocol"),
                     "buyer_identity_mode": getattr(job, "buyer_identity_mode", "legacy"),
                     "continue_merchant": cont,
                 }
@@ -1781,15 +1781,15 @@ class WebHandler(BaseHTTPRequestHandler):
                 },
                 "resolved": resolved.as_public_dict(),
                 "profiles": ["real"],
-                "fingerprint_sources": ["headless", "roxy", "random", "auto"],
-                "datadome_modes": ["headless", "roxy", "protocol", "auto", "off"],
-                "mtr_runtimes": ["headless", "roxy", "python_generated", "auto", "block", "off"],
+                "fingerprint_sources": ["random", "headless", "roxy"],
+                "datadome_modes": ["protocol", "headless", "roxy"],
+                "mtr_runtimes": ["python_generated", "headless", "roxy"],
                 "buyer_identity_modes": [
                     {"value": "legacy", "label": "原版流程"},
                     {"value": "elevate_bind", "label": "注册后升 Guest、绑 EC 再授权"},
                 ],
                 "notes": [
-                    "Aligned with openai-paypal Web: three fine knobs, default headless",
+                    "Aligned with Brazil pure-protocol success path: random + protocol + python_generated",
                     "Roxy optional when Local API + key available",
                     "auto prefers Roxy then falls back",
                     "retries available like Brazil Web",
@@ -1866,9 +1866,9 @@ class WebHandler(BaseHTTPRequestHandler):
                 return
             try:
                 data = self.read_json()
-                fingerprint_source = str(data.get("fingerprint_source", "headless") or "headless")
-                datadome_mode = str(data.get("datadome_mode", "headless") or "headless")
-                mtr_runtime = str(data.get("mtr_runtime", "headless") or "headless")
+                fingerprint_source = str(data.get("fingerprint_source", "random") or "random")
+                datadome_mode = str(data.get("datadome_mode", "protocol") or "protocol")
+                mtr_runtime = str(data.get("mtr_runtime", "python_generated") or "python_generated")
                 job = create_job(
                     owner_device_id=self.get_device_id(),
                     ba_token=data.get("ba_token", ""),

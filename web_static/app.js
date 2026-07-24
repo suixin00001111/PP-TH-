@@ -436,28 +436,34 @@ function setSelectIfValid(sel, value, fallback) {
 }
 
 function normalizeFingerprintSource(v) {
+  // Brazil-compatible: random | headless | roxy
   const x = String(v || "random").trim().toLowerCase().replace(/-/g, "_");
-  if (["headless", "roxy", "random", "auto"].includes(x)) return x;
-  if (x === "program" || x === "python" || x === "synthetic") return "random";
-  if (x === "browser") return "roxy";
+  if (x === "headless" || x === "local_headless" || x === "playwright" || x === "local_playwright") return "headless";
+  if (x === "roxy" || x === "browser" || x === "roxy_browser") return "roxy";
+  // program/python/synthetic/auto/empty -> random (pure protocol)
   return "random";
 }
 
+
 function normalizeDatadomeMode(v) {
+  // Brazil-compatible: protocol | headless | roxy
   const x = String(v || "protocol").trim().toLowerCase().replace(/-/g, "_");
-  if (["headless", "roxy", "protocol", "auto", "off"].includes(x)) return x;
-  if (x === "edge") return "protocol";
-  if (x === "browser") return "roxy";
+  if (x === "headless" || x === "local_headless" || x === "playwright" || x === "local_playwright") return "headless";
+  if (x === "roxy" || x === "browser") return "roxy";
+  // protocol/edge/auto/off/empty -> protocol
   return "protocol";
 }
 
+
 function normalizeMtrRuntime(v) {
+  // Brazil-compatible: python_generated | headless | roxy
   const x = String(v || "python_generated").trim().toLowerCase().replace(/-/g, "_");
-  if (["headless", "roxy", "python_generated", "auto", "block", "off"].includes(x)) return x;
-  if (x === "python" || x === "protocol") return "python_generated";
-  if (x === "browser") return "roxy";
+  if (x === "headless" || x === "local_headless" || x === "playwright" || x === "local_playwright") return "headless";
+  if (x === "roxy" || x === "browser") return "roxy";
+  // python_generated/python/protocol/auto/block/off/empty -> python_generated
   return "python_generated";
 }
+
 
 
 function needsRoxyConfig() {
