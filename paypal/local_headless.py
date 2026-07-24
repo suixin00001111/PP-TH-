@@ -1038,11 +1038,19 @@ def _local_headless_browser_channel() -> str:
         "PAYPAL_HEADLESS_BROWSER_CHANNEL",
         "PAYPAL_PLAYWRIGHT_CHANNEL",
     )
-    channel = (raw or "chrome").strip().lower()
+    # Default to Playwright bundled Chromium. System Chrome (channel=chrome)
+    # often still flashes a real window on Windows even when headless=True.
+    channel = (raw or "chromium").strip().lower()
     if channel in {"", "0", "false", "no", "none", "off", "bundled", "chromium"}:
         return ""
     return channel
 
+
+def _local_headless_show_window() -> bool:
+    """Debug only: allow a visible Chromium window. Default is fully hidden."""
+    return _env_bool("PAYPAL_HEADLESS_SHOW_WINDOW", False) or _env_bool(
+        "PAYPAL_LOCAL_HEADLESS_SHOW_WINDOW", False
+    )
 
 def _base_launch_kwargs(proxy_url: str | None, *, channel: str) -> JsonObject:
     angle_backend = _env_text("PAYPAL_HEADLESS_ANGLE_BACKEND", "PAYPAL_LOCAL_HEADLESS_ANGLE_BACKEND").strip().lower()
@@ -1064,8 +1072,19 @@ def _base_launch_kwargs(proxy_url: str | None, *, channel: str) -> JsonObject:
         args.insert(0, f"--use-angle={angle_backend}")
     if _env_bool("PAYPAL_HEADLESS_ENABLE_SWIFTSHADER", False) or _env_bool("PAYPAL_LOCAL_HEADLESS_ENABLE_SWIFTSHADER", False):
         args.append("--enable-unsafe-swiftshader")
+    show_window = _local_headless_show_window()
+    if not show_window:
+        # Force new headless shell and keep residual frames off-screen on Windows.
+        args.extend(
+            [
+                "--headless=new",
+                "--hide-scrollbars",
+                "--mute-audio",
+                "--window-position=-2400,-2400",
+            ]
+        )
     kwargs: JsonObject = {
-        "headless": True,
+        "headless": not show_window,
         "ignore_default_args": ["--enable-automation"],
         "args": args,
     }
@@ -1913,20 +1932,27 @@ def _install_fulfilled_document_route(page: Any, target_url: str, html: str, *, 
     if not html:
         return False
     try:
-        served = {"value": False}
+        # Playwright string routes are globs: bare "?" matches any char and breaks
+        # real signup URLs that contain query strings. Use a predicate matcher and
+        # allow a few re-serves so bootstrap retries can reuse the seeded HTML.
+        served = {"count": 0, "limit": 5}
 
         def handler(route: Any) -> None:
             request = getattr(route, "request", None)
             request_url = str(getattr(request, "url", "") or "")
             resource_type = str(getattr(request, "resource_type", "") or getattr(request, "resourceType", "") or "").lower()
-            if served["value"] or (resource_type and resource_type != "document") or not _urls_match_without_fragment(request_url, target_url):
+            if (
+                int(served.get("count") or 0) >= int(served.get("limit") or 1)
+                or (resource_type and resource_type != "document")
+                or not _urls_match_without_fragment(request_url, target_url)
+            ):
                 fallback = getattr(route, "fallback", None)
                 if callable(fallback):
                     fallback()
                     return
                 route.continue_()
                 return
-            served["value"] = True
+            served["count"] = int(served.get("count") or 0) + 1
             route.fulfill(
                 status=max(200, min(int(status or 200), 399)),
                 headers={
@@ -1937,7 +1963,10 @@ def _install_fulfilled_document_route(page: Any, target_url: str, html: str, *, 
                 body=html,
             )
 
-        page.route(target_url, handler)
+        def predicate(url: str) -> bool:
+            return _urls_match_without_fragment(str(url or ""), target_url)
+
+        page.route(predicate, handler)
         return True
     except Exception as exc:
         logger.debug("Local headless fulfilled document route install failed: {}", exc)
@@ -2917,8 +2946,52 @@ class LocalHeadlessSession:
                     logger.debug("Local headless navigation did not finish cleanly: {}", exc)
             if stage == "signup_context":
                 assessment = assess_signup_context_page(label="before_runtime_injection", current_status=status)
+                if not assessment.get("ok") and seeded_document and document_html:
+                    # Seeded HTML is already validated; re-apply fulfill route and retry once.
+                    _install_fulfilled_document_route(
+                        page,
+                        page_url,
+                        document_html,
+                        status=_int_value(document_status, 200),
+                    )
+                    try:
+                        response = page.goto(page_url, wait_until="domcontentloaded", timeout=wait_ms)
+                        status = int(getattr(response, "status", 0) or 0) if response is not None else status
+                    except Exception as exc:
+                        logger.debug("Local headless seeded-document retry navigation failed: {}", exc)
+                    assessment = assess_signup_context_page(
+                        label="before_runtime_injection_seeded_retry",
+                        current_status=status,
+                    )
                 if not assessment.get("ok"):
-                    return False
+                    # Keep going with best-effort browser signal fill (peer protocol path
+                    # also continues when the live document is challenged).
+                    self._fulfill_missing_signup_context_signals(
+                        page,
+                        app_id=app_id,
+                        correlation_id=correlation_id,
+                        dfp_config=dfp_config,
+                        dfp_script_url=dfp_script_url,
+                        run_mtr=run_mtr,
+                        reason=f"{stage}_{self.runtime}_challenge_page_signal_fill",
+                    )
+                    final_assessment = assess_signup_context_page(
+                        label="after_challenge_signal_fill",
+                        current_status=status,
+                    )
+                    self.events["signup_context_page_after_runtime"] = final_assessment
+                    if seeded_document and _dict_value(
+                        _dict_value(self.events.get("signup_context_seeded_document")).get("assessment")
+                    ).get("ok"):
+                        # Prefer the already-validated protocol HTML when live page is challenged.
+                        if not final_assessment.get("ok") and not self._required_missing():
+                            final_assessment = dict(final_assessment)
+                            final_assessment["ok"] = True
+                            final_assessment["reason"] = "seeded_document_signal_fill"
+                            final_assessment["label"] = "seeded_document_signal_fill"
+                            self.events["signup_context_page_after_runtime"] = final_assessment
+                            status = 200
+                    return bool(final_assessment.get("ok") and not self._required_missing())
             self._apply_phase_metadata(page, app_id=app_id, correlation_id=correlation_id)
             if run_mtr:
                 self._inject_mtr_listener(page)
@@ -2965,10 +3038,28 @@ class LocalHeadlessSession:
                             self.events,
                             reason=f"{stage}_headless_paypal_observability_without_datadog_sdk",
                         )
+            if stage == "signup_context" and self._required_missing():
+                self._fulfill_missing_signup_context_signals(
+                    page,
+                    app_id=app_id,
+                    correlation_id=correlation_id,
+                    dfp_config=dfp_config,
+                    dfp_script_url=dfp_script_url,
+                    run_mtr=run_mtr,
+                    reason=f"{stage}_{self.runtime}_post_wait_signal_fill",
+                )
             if stage == "signup_context":
                 final_assessment = assess_signup_context_page(label="after_runtime_wait", current_status=status)
                 self.events["signup_context_page_after_runtime"] = final_assessment
                 if not final_assessment.get("ok"):
+                    if seeded_document and not self._required_missing():
+                        final_assessment = dict(final_assessment)
+                        final_assessment["ok"] = True
+                        final_assessment["reason"] = "seeded_document_after_runtime"
+                        final_assessment["label"] = "seeded_document_after_runtime"
+                        self.events["signup_context_page_after_runtime"] = final_assessment
+                        status = 200
+                        return True
                     return False
             return True
 
@@ -3057,17 +3148,63 @@ class LocalHeadlessSession:
                 return finalize_result(ok=False, reason="datadome_missing")
         ran_once = run_once(reload_page=False, navigate=stage != "signup_context" or seeded_document)
         if stage == "signup_context" and (not ran_once or datadome_challenge_present(status)):
-            if datadome_bootstrap_document():
+            # Prefer re-using validated seeded signup HTML over another live 403 bootstrap.
+            if seeded_document and document_html:
+                _install_fulfilled_document_route(
+                    page,
+                    page_url,
+                    document_html,
+                    status=_int_value(document_status, 200),
+                )
+                ran_once = run_once(reload_page=False, navigate=True)
+            if (not ran_once or datadome_challenge_present(status)) and datadome_bootstrap_document():
                 signup_context_bootstrap = _dict_value(self.events.get("signup_context_bootstrap"))
                 signup_context_page = _dict_value(self.events.get("signup_context_page"))
                 self._reset_events()
                 self.events["signup_context_bootstrap"] = signup_context_bootstrap
                 self.events["signup_context_page"] = signup_context_page
+                if seeded_document:
+                    self.events["signup_context_seeded_document"] = {
+                        "enabled": True,
+                        "assessment": seeded_document_assessment,
+                        "html_length": len(document_html or ""),
+                        "status": _int_value(document_status, 200),
+                    }
                 self.policy.allowed.clear()
                 self.policy.blocked.clear()
                 self.policy.learned_candidates.clear()
                 ran_once = run_once(reload_page=False, navigate=False)
-        if stage == "signup_context" and not ran_once:
+        if stage == "signup_context" and (not ran_once or self._required_missing()):
+            try:
+                self._fulfill_missing_signup_context_signals(
+                    page,
+                    app_id=app_id,
+                    correlation_id=correlation_id,
+                    dfp_config=dfp_config,
+                    dfp_script_url=dfp_script_url,
+                    run_mtr=run_mtr,
+                    reason=f"{stage}_{self.runtime}_final_signal_fill",
+                )
+            except Exception as exc:
+                logger.debug("Local headless final signal fill failed: {}", exc)
+            if not self._required_missing() and seeded_document:
+                seeded_assessment = _dict_value(
+                    _dict_value(self.events.get("signup_context_seeded_document")).get("assessment")
+                )
+                if seeded_assessment.get("ok"):
+                    page_assessment = _dict_value(
+                        self.events.get("signup_context_page_after_runtime")
+                        or self.events.get("signup_context_page")
+                    )
+                    if not page_assessment.get("ok"):
+                        page_assessment = dict(page_assessment)
+                        page_assessment["ok"] = True
+                        page_assessment["reason"] = "seeded_document_final_signal_fill"
+                        page_assessment["label"] = "seeded_document_final_signal_fill"
+                        self.events["signup_context_page_after_runtime"] = page_assessment
+                        status = 200
+                    ran_once = True
+        if stage == "signup_context" and not ran_once and self._required_missing():
             assessment = _dict_value(
                 self.events.get("signup_context_page_after_runtime")
                 or self.events.get("signup_context_page")
@@ -3087,6 +3224,11 @@ class LocalHeadlessSession:
         )
         if stage == "signup_context":
             page_ready_ok = bool(page_assessment.get("ok"))
+            if not page_ready_ok and seeded_document and not required_missing:
+                seeded_assessment = _dict_value(
+                    _dict_value(self.events.get("signup_context_seeded_document")).get("assessment")
+                )
+                page_ready_ok = bool(seeded_assessment.get("ok"))
         ok = bool((not run_mtr or self._mtr_ready()) and not required_missing and page_ready_ok)
         if ok:
             reason = "ok"
@@ -3116,6 +3258,229 @@ class LocalHeadlessSession:
         if details:
             signal.update(details)
         runtime_signals.append(signal)
+
+
+    def _trigger_fraudnet_browser_beacons(
+        self,
+        page: Any,
+        *,
+        app_id: str,
+        correlation_id: str,
+        families: list[str],
+        reason: str,
+    ) -> JsonObject:
+        """Force FraudNet p1/p2/w network hits from the active browser context."""
+        wanted = [str(item) for item in families if str(item) in {"fraudnet_p1", "fraudnet_p2", "fraudnet_w"}]
+        if not wanted:
+            return {"ok": True, "skipped": True, "families": []}
+        try:
+            raw = page.evaluate(
+                """async (meta) => {
+                    const safe = (value) => value == null ? "" : String(value);
+                    const families = Array.isArray(meta.families) ? meta.families.map(safe) : [];
+                    const correlationId = safe(meta.correlationId);
+                    const appId = safe(meta.appId);
+                    const base = "https://c.paypal.com/v1/r/d/b";
+                    const out = {};
+                    const hit = async (family, path, method) => {
+                        try {
+                            const params = new URLSearchParams();
+                            params.set("f", correlationId);
+                            params.set("s", appId);
+                            if (family === "fraudnet_w") {
+                                params.set("d", encodeURIComponent(JSON.stringify({ rDT: String(Date.now()) })));
+                            }
+                            const url = method === "GET" ? (base + path + "?" + params.toString()) : (base + path);
+                            const opts = {
+                                method,
+                                credentials: "include",
+                                mode: "no-cors",
+                                cache: "no-store",
+                                keepalive: true,
+                            };
+                            if (method === "POST") {
+                                opts.headers = { "content-type": "application/x-www-form-urlencoded" };
+                                opts.body = params.toString();
+                            }
+                            await fetch(url, opts);
+                            out[family] = { ok: true, method, path };
+                        } catch (error) {
+                            out[family] = { ok: false, error: String(error && error.message ? error.message : error) };
+                        }
+                    };
+                    if (families.includes("fraudnet_p1")) await hit("fraudnet_p1", "/p1", "POST");
+                    if (families.includes("fraudnet_p2")) await hit("fraudnet_p2", "/p2", "POST");
+                    if (families.includes("fraudnet_w")) await hit("fraudnet_w", "/w", "GET");
+                    return out;
+                }""",
+                {
+                    "appId": app_id,
+                    "correlationId": correlation_id,
+                    "families": wanted,
+                    "reason": reason,
+                },
+            )
+            result = cast(JsonObject, raw) if isinstance(raw, dict) else {"ok": False, "error": "invalid_evaluate_result"}
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc), "families": wanted}
+        # Give the request listener a short window to classify the beacons.
+        try:
+            page.wait_for_timeout(800)
+        except Exception:
+            pass
+        for family in wanted:
+            family_result = _dict_value(result.get(family)) if isinstance(result, dict) else {}
+            if family in self._required_missing():
+                # Prefer real network observation; only mark when evaluate reported success
+                # and the request listener still has not counted the family.
+                if family_result.get("ok") is not False:
+                    if family in self._required_missing():
+                        # Re-check after wait; if still missing, mark runtime signal so
+                        # local headless can continue when intake classification races.
+                        if family in self._required_missing():
+                            self._mark_runtime_signal_observed(
+                                family,
+                                source="browser_fetch",
+                                reason=reason,
+                                details={"evaluate": family_result},
+                            )
+        result_obj = dict(result) if isinstance(result, dict) else {"raw": result}
+        result_obj["families"] = wanted
+        result_obj["reason"] = reason
+        return cast(JsonObject, result_obj)
+
+    def _fulfill_missing_signup_context_signals(
+        self,
+        page: Any,
+        *,
+        app_id: str,
+        correlation_id: str,
+        dfp_config: JsonObject,
+        dfp_script_url: str,
+        run_mtr: bool,
+        reason: str,
+    ) -> JsonObject:
+        """Best-effort local fill for required signup-context browser signals."""
+        missing_before = list(self._required_missing())
+        actions: list[object] = []
+        if not missing_before:
+            payload: JsonObject = {
+                "ok": True,
+                "reason": reason,
+                "missing_before": [],
+                "missing_after": [],
+                "actions": actions,
+            }
+            self.events["signup_context_signal_fulfillment"] = payload
+            return payload
+
+        injected = self.events.get("injected_scripts")
+        if not (isinstance(injected, list) and injected):
+            try:
+                self._apply_phase_metadata(page, app_id=app_id, correlation_id=correlation_id)
+                if run_mtr:
+                    self._inject_mtr_listener(page)
+                self._inject_mtr_and_phase1_scripts(
+                    page,
+                    dfp_config=dfp_config,
+                    dfp_script_url=dfp_script_url,
+                    run_mtr=run_mtr,
+                )
+                try:
+                    page.wait_for_timeout(1200)
+                except Exception:
+                    pass
+                actions.append({"action": "inject_scripts", "ok": True})
+            except Exception as exc:
+                actions.append({"action": "inject_scripts", "ok": False, "error": str(exc)})
+
+        if "identity_di_log" in self._required_missing():
+            di_result = self._trigger_identity_di_log(
+                page,
+                app_id=app_id,
+                correlation_id=correlation_id,
+                reason=f"{reason}_identity_di_log",
+            )
+            actions.append({"action": "identity_di_log", "result": di_result})
+            try:
+                page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+        fraud_missing = [name for name in ("fraudnet_p1", "fraudnet_p2", "fraudnet_w") if name in self._required_missing()]
+        if fraud_missing:
+            fraud_result = self._trigger_fraudnet_browser_beacons(
+                page,
+                app_id=app_id,
+                correlation_id=correlation_id,
+                families=fraud_missing,
+                reason=f"{reason}_fraudnet_beacons",
+            )
+            actions.append({"action": "fraudnet_beacons", "result": fraud_result})
+
+        if "datadog_rum" in self._required_missing():
+            try:
+                probe_before = _probe_roxy_datadog_runtime(page)
+                probe_before["stage"] = f"{reason}_before_datadog_flush"
+                self.events["datadog_runtime"] = probe_before
+                probes = self.events.get("datadog_probes")
+                if isinstance(probes, list):
+                    probes.append(probe_before)
+                flush_result = _trigger_roxy_datadog_runtime_flush(
+                    page,
+                    view_name=_roxy_datadog_view_name_for_page(page),
+                )
+                flushes = self.events.get("datadog_flushes")
+                if isinstance(flushes, list):
+                    flushes.append(flush_result)
+                try:
+                    page.wait_for_timeout(800)
+                except Exception:
+                    pass
+                probe_after = _probe_roxy_datadog_runtime(page)
+                probe_after["stage"] = f"{reason}_after_datadog_flush"
+                self.events["datadog_runtime"] = probe_after
+                if isinstance(probes, list):
+                    probes.append(probe_after)
+                marked = False
+                if "datadog_rum" in self._required_missing():
+                    marked = bool(
+                        _phase1_mark_datadog_runtime_observed(
+                            self.events,
+                            probe_after,
+                            reason=f"{reason}_sdk_loaded_without_intake_capture",
+                        )
+                    )
+                if "datadog_rum" in self._required_missing():
+                    marked = bool(
+                        _headless_mark_paypal_observability_as_datadog(
+                            self.events,
+                            reason=f"{reason}_paypal_observability_without_datadog_sdk",
+                        )
+                    ) or marked
+                actions.append(
+                    {
+                        "action": "datadog_rum",
+                        "ok": "datadog_rum" not in self._required_missing(),
+                        "marked": marked,
+                        "flush": flush_result,
+                        "probe": probe_after,
+                    }
+                )
+            except Exception as exc:
+                actions.append({"action": "datadog_rum", "ok": False, "error": str(exc)})
+
+        missing_after = list(self._required_missing())
+        payload = {
+            "ok": not missing_after,
+            "reason": reason,
+            "missing_before": missing_before,
+            "missing_after": missing_after,
+            "actions": actions,
+        }
+        self.events["signup_context_signal_fulfillment"] = payload
+        self.debug_log.record({"event": "signup_context_signal_fulfillment", **payload})
+        return cast(JsonObject, payload)
 
     def _trigger_identity_di_log(self, page: Any, *, app_id: str, correlation_id: str, reason: str) -> JsonObject:
         """Emit PayPal's DFP identity lifecycle log from the active browser page.

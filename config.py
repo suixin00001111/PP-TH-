@@ -32,20 +32,22 @@ RUN_PROFILE = "real"
 
 # Coarse runtime: protocol | headless | auto | roxy
 # real profile default is auto (Roxy if key present else headless)
-RUNTIME_MODE = "auto"
+RUNTIME_MODE = "protocol"
 
 # Fine risk modes (openai-paypal compatible).
 # When RUNTIME_MODE is set, runtime_config maps coarse->fine unless env overrides.
-FINGERPRINT_SOURCE = "auto"      # random | headless | roxy | auto
-DATADOME_MODE = "auto"           # protocol | headless | roxy | auto | off
+FINGERPRINT_SOURCE = "random"    # random | headless | roxy | auto
+# Peer openai-paypal local success path uses protocol DataDome (no fingerprint browser).
+DATADOME_MODE = "protocol"       # protocol | headless | roxy | auto | off
 DATADOME_ROXY_WAIT_SECONDS = 12.0
 DATADOME_HEADLESS_WAIT_SECONDS = 14.0
-MTR_RUNTIME_MODE = "auto"        # python_generated | headless | roxy | auto | off
+MTR_RUNTIME_MODE = "python_generated"  # python_generated | headless | roxy | auto | off
 MTR_ROXY_WAIT_SECONDS = 20.0
 MTR_HEADLESS_WAIT_SECONDS = 20.0
 MTR_CHANNEL = "iwc-mxo"
 MTR_API_KEY = ""
-RISK_SIGNALS_MODE = "auto"       # protocol | headless | roxy | auto
+# Local peer-aligned default: pure protocol risk (no fingerprint browser).
+RISK_SIGNALS_MODE = "protocol"   # protocol | headless | roxy | auto
 RISK_ROXY_WAIT_SECONDS = 18.0
 RISK_HEADLESS_WAIT_SECONDS = 12.0
 
@@ -113,3 +115,5 @@ WEB_MAX_LOG_LINES = 300
 # Prefer browser risk path for real runs
 # PAYPAL_DATADOME_PHASE0_PREFLIGHT=1
 # PAYPAL_ROXY_RUNTIME_FALLBACK=1
+
+

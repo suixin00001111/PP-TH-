@@ -27,7 +27,7 @@ from loguru import logger
 
 from paypal.flow import PayPalFlow
 from paypal.models import BillingAddress, CardInfo, UserInfo
-from paypal.oaipy_data import generate_address, generate_card, generate_user
+from paypal.oaipy_data import generate_address, generate_card, generate_oaipy_profile, generate_user
 from paypal.proxy import ProxyConfig, build_proxy_config, resolve_working_proxy_entry, resolve_outbound_proxy, get_system_proxy_entry, scrub_process_proxy_env, restore_process_proxy_env
 from paypal.regions import get_region, normalize_phone, normalize_region, list_regions_public
 from paypal.b_layer_handoff import build_b_layer_evidence, persist_b_layer_evidence
@@ -496,8 +496,34 @@ def parse_cookie_header(header: str) -> dict[str, str]:
     return cookies
 
 
-def public_generated_payload(user: UserInfo, card: CardInfo, address: BillingAddress) -> dict[str, Any]:
+def public_generated_payload(
+    user: UserInfo,
+    card: CardInfo,
+    address: BillingAddress,
+    meta: dict[str, Any] | None = None,
+    country: str | None = None,
+) -> dict[str, Any]:
     """Data shown in the browser. Keep secrets/PII masked in API responses."""
+    code = str(country or getattr(address, "country", None) or "TH").strip().upper() or "TH"
+    profile_meta: dict[str, Any]
+    if isinstance(meta, dict) and meta:
+        profile_meta = dict(meta)
+        profile_meta.setdefault("country", code)
+    else:
+        try:
+            from paypal.country_profiles import content_manifest_hints, profile_depth
+
+            profile_meta = {
+                "country": code,
+                "data_source": "country_profiles + Faker + curated Latin name pools",
+                "profile_depth": profile_depth(code),
+                "content": content_manifest_hints(code),
+            }
+        except Exception:
+            profile_meta = {
+                "country": code,
+                "data_source": "fallback generators",
+            }
     return {
         "user": {
             "first_name": user.first_name,
@@ -516,8 +542,10 @@ def public_generated_payload(user: UserInfo, card: CardInfo, address: BillingAdd
             "expiry": card.expiry,
             "cvv": "***",
             "card_type": card.card_type,
+            "bin6": (card.number or "")[:6],
         },
         "address": sanitize_payload(asdict(address)),
+        "meta": sanitize_payload(profile_meta),
     }
 
 
@@ -693,10 +721,10 @@ class WebJob:
     country: str = "TH"
     runtime_mode: str = "headless"
     profile: str = "real"
-    fingerprint_source: str = "headless"
-    datadome_mode: str = "headless"
-    mtr_runtime: str = "headless"
-    risk_signals_mode: str = "headless"
+    fingerprint_source: str = "random"
+    datadome_mode: str = "protocol"
+    mtr_runtime: str = "python_generated"
+    risk_signals_mode: str = "protocol"
     buyer_identity_mode: str = "legacy"
     continue_merchant: bool = False
     smsbower_enabled: bool = False
@@ -987,14 +1015,14 @@ class WebPayPalFlow(PayPalFlow):
             "running",
             f"整流程重试 {flow_attempt}/{self.max_flow_attempts}，已重新生成资料",
         )
-        self.job.set_generated(public_generated_payload(self.user, self.card, self.address))
+        self.job.set_generated(public_generated_payload(self.user, self.card, self.address, country=getattr(self.job, 'country', None) or getattr(self.address, 'country', None)))
 
     def _on_signup_retry_generated(self, signup_attempt: int, reason: str):
         self.job.set_status(
             "running",
             f"注册换卡重试 {signup_attempt}/{self.max_card_attempts}，已更新账号/卡信息",
         )
-        self.job.set_generated(public_generated_payload(self.user, self.card, self.address))
+        self.job.set_generated(public_generated_payload(self.user, self.card, self.address, country=getattr(self.job, 'country', None) or getattr(self.address, 'country', None)))
 
     def _prompt_operator(self, prompt: str) -> str:
         logger.info(prompt)
@@ -1007,7 +1035,7 @@ class WebPayPalFlow(PayPalFlow):
         self.job.updated_at = now_ts()
         try:
             # refresh generated block so phone module shows the auto number
-            self.job.set_generated(public_generated_payload(self.user, self.card, self.address))
+            self.job.set_generated(public_generated_payload(self.user, self.card, self.address, country=getattr(self.job, 'country', None) or getattr(self.address, 'country', None)))
         except Exception:
             pass
         # also stash full phone for UI fill (masked still in generated.user.phone)
@@ -1142,9 +1170,20 @@ class WebPayPalFlow(PayPalFlow):
                 auth_id, challenge_id = self._initiate_2fa_phone_confirmation(token, signup_url)
             except Exception as e:
                 logger.error("Failed to initiate OTP for {}: {}", self._masked_phone(), e)
+                err_text = str(e or "")
+                hint = phone_input_hint(self.job.country, getattr(self.user, "phone", ""))
+                if "NUMBER_NOT_SUPPORTED" in err_text.upper():
+                    prompt = (
+                        f"PayPal拒号 NUMBER_NOT_SUPPORTED（号段不支持/虚拟号常见，非协议崩）。"
+                        f"请换真实同国手机号（{hint}）；q 退出"
+                    )
+                elif "state=" in err_text:
+                    prompt = f"发码失败（{err_text[:120]}）。请输入新手机号（{hint}）；q 退出"
+                else:
+                    prompt = f"发码失败，请输入新手机号（{hint}）；q 退出"
                 while True:
                     value = self._prompt_operator(
-                        f"发码失败，请输入新手机号（{phone_input_hint(self.job.country, getattr(self.user, 'phone', ''))}）；q 退出"
+                        prompt
                     )
                     if value.lower() in {"q", "quit", "exit"}:
                         raise RuntimeError("OTP confirmation cancelled by user") from e
@@ -1248,9 +1287,9 @@ def create_job(
     country: str = "TH",
     runtime_mode: str = "",
     profile: str = "real",
-    fingerprint_source: str = "headless",
-    datadome_mode: str = "headless",
-    mtr_runtime: str = "headless",
+    fingerprint_source: str = "random",
+    datadome_mode: str = "protocol",
+    mtr_runtime: str = "python_generated",
     risk_signals_mode: str = "",
     continue_merchant: bool = False,
     buyer_identity_mode: str = "legacy",
@@ -1286,9 +1325,9 @@ def create_job(
     continue_merchant = False  # A-layer only (aligned with openai-paypal; no B/C switch)
 
     # Brazil-style fine knobs (defaults headless; protocol allowed on DataDome)
-    fingerprint_source = str(fingerprint_source or "headless").strip().lower().replace("-", "_")
-    datadome_mode = str(datadome_mode or "headless").strip().lower().replace("-", "_")
-    mtr_runtime = str(mtr_runtime or "headless").strip().lower().replace("-", "_")
+    fingerprint_source = str(fingerprint_source or "random").strip().lower().replace("-", "_")
+    datadome_mode = str(datadome_mode or "protocol").strip().lower().replace("-", "_")
+    mtr_runtime = str(mtr_runtime or "python_generated").strip().lower().replace("-", "_")
     if fingerprint_source not in FINGERPRINT_SOURCE_CHOICES:
         raise ValueError(f"unsupported fingerprint_source: {fingerprint_source}")
     if datadome_mode not in DATADOME_MODE_CHOICES:
@@ -1345,7 +1384,7 @@ def create_job(
         risk_signals_mode,
     )
     if risk_signals_mode not in RISK_SIGNALS_MODE_CHOICES:
-        risk_signals_mode = "headless"
+        risk_signals_mode = "protocol"
 
     # Coarse mode for browser engine; fine knobs are source of truth (Brazil Web).
     # Only honor explicit runtime_mode if the client actually sent one.
@@ -1527,10 +1566,19 @@ def run_job(job: WebJob) -> None:
                 raise
             job.proxy_enabled = proxy_config.enabled
             job.proxy_label = proxy_config.label
-            user = generate_user(job.phone, country=job.country)
-            card = generate_card()
-            address = generate_address(country=job.country)
-            job.set_generated(public_generated_payload(user, card, address))
+            profile = generate_oaipy_profile(phone=job.phone, country=job.country)
+            user = profile["user"]
+            card = profile["card"]
+            address = profile["address"]
+            job.set_generated(
+                public_generated_payload(
+                    user,
+                    card,
+                    address,
+                    meta=profile.get("meta"),
+                    country=job.country,
+                )
+            )
 
             logger.info("Web job started: {}", job.id)
             logger.info("Proxy: {}", proxy_config.label)
@@ -1724,11 +1772,11 @@ class WebHandler(BaseHTTPRequestHandler):
             resolved = resolve_runtime()
             return self.send_json({
                 "default": {
-                    "fingerprint_source": "headless",
-                    "datadome_mode": "headless",
-                    "mtr_runtime": "headless",
-                    "risk_signals_mode": "headless",
-                    "runtime_mode": "headless",
+                    "fingerprint_source": "random",
+                    "datadome_mode": "protocol",
+                    "mtr_runtime": "python_generated",
+                    "risk_signals_mode": "protocol",
+                    "runtime_mode": "protocol",
                     "profile": "real",
                 },
                 "resolved": resolved.as_public_dict(),

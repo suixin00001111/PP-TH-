@@ -113,16 +113,17 @@ def map_coarse_to_fine(coarse: str) -> dict[str, str]:
 
 
 def profile_defaults(profile: str) -> dict[str, Any]:
-    """Scenario defaults: test = pure protocol smoke; real = browser-capable."""
+    """Scenario defaults: test/real both local-protocol by default; override for headless/roxy."""
     if profile == "test":
         return {
             "runtime_mode": "protocol",
             "continue_merchant": False,
             "traffic_record": False,
         }
-    # real
+    # real: keep peer-aligned local protocol defaults (no Roxy required).
+    # Explicit --runtime headless/roxy or env overrides still work.
     return {
-        "runtime_mode": "auto",
+        "runtime_mode": "protocol",
         "continue_merchant": False,
         "traffic_record": False,
     }
@@ -292,3 +293,4 @@ def resolve_and_apply(**kwargs: Any) -> ResolvedRuntime:
     resolved = resolve_runtime(**kwargs)
     apply_runtime_to_environ(resolved)
     return resolved
+

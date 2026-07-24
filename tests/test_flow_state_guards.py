@@ -244,6 +244,78 @@ class FlowStateGuardTests(unittest.TestCase):
         with patched_signals(), self.assertRaisesRegex(RuntimeError, "refusing to substitute"):
             flow._phase3_signup_and_2fa()
 
+    def test_phase0_hard_datadome_page_fails_after_load(self):
+        # 200 challenge page (no empty-token POST path) must still hard-fail before
+        # static ModXO action ids are trusted for Phase 2.
+        session = FakeSession(
+            gets=[
+                FakeResponse(
+                    status_code=200,
+                    url="https://www.paypal.com/agreements/approve?ba_token=BA-TEST12345678",
+                    text=(
+                        "<html><body>paypal-authchallenge captcha-delivery.com "
+                        "device_check_redirect_to_slider</body></html>"
+                    ),
+                )
+            ],
+        )
+        flow = make_flow(session)
+
+        with patch("paypal.flow.PayPalSession", return_value=session), patch("paypal.flow.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, r"Phase 0 still blocked by DataDome"):
+                flow._phase0_initial_load()
+
+        self.assertEqual(session.post_calls, [])
+
+    def test_ineligible_modxo_redirect_is_rejected(self):
+        ineligible_url = (
+            "https://www.paypal.com/checkoutweb/signup?modxo_redirect_reason=ineligible"
+            "&country.x=NL&ba_token=BA-TEST12345678"
+        )
+        session = FakeSession(
+            posts=[
+                FakeResponse(status_code=200, text="pay action ok"),
+                FakeResponse(
+                    status_code=200,
+                    text=json.dumps({"onboardingRedirectUrl": ineligible_url}),
+                ),
+            ],
+        )
+        flow = make_flow(session, action_ids=True)
+
+        with patched_signals(), self.assertRaisesRegex(
+            RuntimeError,
+            r"modxo_redirect_reason=ineligible",
+        ):
+            flow._phase2_create_account()
+
+        self.assertEqual(session.graphql_calls, [])
+        self.assertEqual(session.get_calls, [])
+
+    def test_datadome_and_ineligible_errors_are_not_full_flow_retryable(self):
+        self.assertFalse(
+            PayPalFlow._should_retry_full_flow_exception(
+                RuntimeError(
+                    "Phase 0 still blocked by DataDome/challenge page after load (status=403)."
+                )
+            )
+        )
+        self.assertFalse(
+            PayPalFlow._should_retry_full_flow_exception(
+                RuntimeError(
+                    "PayPal ModXO redirect reason=ineligible: BA token/session is not eligible "
+                    "for guest create-account checkout."
+                )
+            )
+        )
+        self.assertTrue(
+            PayPalFlow._should_retry_full_flow_exception(
+                RuntimeError(
+                    "Create account flow did not produce an EC checkout token (no valid EC token)."
+                )
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

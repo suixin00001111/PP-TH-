@@ -169,17 +169,22 @@ _FALLBACK_CARD_PREFIXES = [
 ]
 
 
-def generate_card(proxy_url: str | None = None) -> CardInfo:
+def generate_card(proxy_url: str | None = None, country: str | None = None) -> CardInfo:
     del proxy_url
-    prefix, _issuer = random.choice(_FALLBACK_CARD_PREFIXES)
-    remaining = 16 - len(prefix) - 1
-    body = prefix + "".join(str(random.randint(0, 9)) for _ in range(remaining))
-    check = _luhn_checksum(body)
-    number = body + str(check)
+    try:
+        from paypal.country_profiles import generate_card_number
+        number, brand = generate_card_number(country)
+    except Exception:
+        prefix, brand = random.choice(_FALLBACK_CARD_PREFIXES)
+        remaining = 16 - len(prefix) - 1
+        body = prefix + "".join(str(random.randint(0, 9)) for _ in range(remaining))
+        number = body + str(_luhn_checksum(body))
     month = random.randint(1, 12)
     year = random.randint(2027, 2031)
     expiry = f"{month:02d}/{year}"
     cvv = f"{random.randint(0, 999):03d}"
+    # brand kept only for future issuer mapping; CardInfo is number-focused
+    del brand
     return CardInfo(number=number, expiry=expiry, cvv=cvv, card_type="CREDIT")
 
 

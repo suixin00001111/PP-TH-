@@ -85,18 +85,18 @@
           <label>
             <span>浏览器指纹来源</span>
             <select id="fingerprintSource" name="fingerprintSource">
-              <option value="headless" selected>本地 Headless</option>
+              <option value="headless">本地 Headless</option>
               <option value="roxy">Roxy 指纹浏览器</option>
-              <option value="random">程序随机生成</option>
+              <option value="random" selected>程序随机生成</option>
               <option value="auto">自动：优先 Roxy</option>
             </select>
           </label>
           <label>
             <span>DataDome 模式</span>
             <select id="datadomeMode" name="datadomeMode">
-              <option value="headless" selected>本地 Headless</option>
+              <option value="headless">本地 Headless</option>
               <option value="roxy">Roxy 浏览器执行（同 Headless 逻辑）</option>
-              <option value="protocol">协议边缘模拟</option>
+              <option value="protocol" selected>协议边缘模拟</option>
               <option value="auto">自动：Roxy 失败回退</option>
               <option value="off">关闭</option>
             </select>
@@ -104,9 +104,9 @@
           <label>
             <span>MTR sealedResult</span>
             <select id="mtrRuntime" name="mtrRuntime">
-              <option value="headless" selected>本地 Headless</option>
+              <option value="headless">本地 Headless</option>
               <option value="roxy">Roxy 浏览器执行 dfp.js（同 Headless 逻辑）</option>
-              <option value="python_generated">程序模板生成</option>
+              <option value="python_generated" selected>程序模板生成</option>
               <option value="auto">自动：Roxy 失败回退</option>
               <option value="block">严格阻断缺失</option>
               <option value="off">关闭</option>
@@ -277,6 +277,7 @@
             <div>
               <h3>生成资料</h3>
               <pre id="generatedBox" class="json-box">{}</pre>
+              <div id="profileSourceHint" class="sec-hint">profiles: paypal/country_profiles.py</div>
             </div>
             <div>
               <h3>结果</h3>
@@ -299,4 +300,3 @@
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   <script src="/static/app.js"></script>
 </body>
-</html>

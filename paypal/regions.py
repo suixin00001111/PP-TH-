@@ -152,21 +152,23 @@ def get_region(code: str | None = None) -> RegionProfile:
 def normalize_phone(country: str, value: str) -> tuple[str, str, str]:
     """Return (e164, local, phone_cc).
 
-    Empty phone uses the region sample_local so profile generation can run
-    without an external SMS number (caller may replace via SMSBower later).
+    Empty phone generates a valid local number from country phone rules
+    (falling back to sample_local if rules are unavailable).
     """
     region = get_region(country)
-    raw = (value or "").strip()
     cc = region.phone_cc_digits
+    raw = (value or "").strip()
     if not raw:
-        local = region.sample_local
+        try:
+            from paypal.country_profiles import generate_local_phone
+            local = generate_local_phone(region.code)
+        except Exception:
+            local = region.sample_local
         return f"+{cc}{local}", local, f"+{cc}"
+
     digits = "".join(ch for ch in raw if ch.isdigit())
-    if not digits:
-        local = region.sample_local
-        return f"+{cc}{local}", local, f"+{cc}"
-    if raw.lstrip().startswith("+") and not digits.startswith(cc):
-        # allow full e164 of another formatting if still same cc via leading +
+    if raw.startswith("+") and not digits.startswith(cc):
+        # Allow other formatting if still same cc via leading +
         # but reject clear wrong-country numbers
         raise ValueError(f"phone must use country code +{cc} for {region.code}")
     if digits.startswith(cc):
@@ -175,8 +177,19 @@ def normalize_phone(country: str, value: str) -> tuple[str, str, str]:
         local = digits[1:]
     else:
         local = digits
+    # National trunk prefix "0" may remain after stripping country code
+    # (e.g. +31 06 12345678 / 310612345678 -> 0612345678).
+    if local.startswith("0") and len(local) > 1:
+        local = local[1:]
     if not local or not local.isdigit() or not (6 <= len(local) <= 15):
         raise ValueError(f"invalid local phone length for {region.phone_cc}")
+    # Soft validation against country rules when available; do not hard-reject
+    # user-provided numbers that only differ in prefix style.
+    try:
+        from paypal.country_profiles import validate_local_phone
+        _ = validate_local_phone(region.code, local)
+    except Exception:
+        pass
     return f"+{cc}{local}", local, f"+{cc}"
 
 

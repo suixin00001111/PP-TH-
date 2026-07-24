@@ -436,35 +436,35 @@ function setSelectIfValid(sel, value, fallback) {
 }
 
 function normalizeFingerprintSource(v) {
-  const x = String(v || "headless").trim().toLowerCase().replace(/-/g, "_");
+  const x = String(v || "random").trim().toLowerCase().replace(/-/g, "_");
   if (["headless", "roxy", "random", "auto"].includes(x)) return x;
   if (x === "program" || x === "python" || x === "synthetic") return "random";
   if (x === "browser") return "roxy";
-  return "headless";
+  return "random";
 }
 
 function normalizeDatadomeMode(v) {
-  const x = String(v || "headless").trim().toLowerCase().replace(/-/g, "_");
+  const x = String(v || "protocol").trim().toLowerCase().replace(/-/g, "_");
   if (["headless", "roxy", "protocol", "auto", "off"].includes(x)) return x;
   if (x === "edge") return "protocol";
   if (x === "browser") return "roxy";
-  return "headless";
+  return "protocol";
 }
 
 function normalizeMtrRuntime(v) {
-  const x = String(v || "headless").trim().toLowerCase().replace(/-/g, "_");
+  const x = String(v || "python_generated").trim().toLowerCase().replace(/-/g, "_");
   if (["headless", "roxy", "python_generated", "auto", "block", "off"].includes(x)) return x;
   if (x === "python" || x === "protocol") return "python_generated";
   if (x === "browser") return "roxy";
-  return "headless";
+  return "python_generated";
 }
 
 
 function needsRoxyConfig() {
   const modes = [
-    normalizeFingerprintSource($("#fingerprintSource")?.value || "headless"),
-    normalizeDatadomeMode($("#datadomeMode")?.value || "headless"),
-    normalizeMtrRuntime($("#mtrRuntime")?.value || "headless"),
+    normalizeFingerprintSource($("#fingerprintSource")?.value || "random"),
+    normalizeDatadomeMode($("#datadomeMode")?.value || "protocol"),
+    normalizeMtrRuntime($("#mtrRuntime")?.value || "python_generated"),
   ];
   return modes.some((m) => m === "roxy" || m === "auto");
 }
@@ -571,26 +571,26 @@ function normalizeBuyerIdentityMode(value) {
 
 function getRuntimePayload() {
   return {
-    fingerprint_source: normalizeFingerprintSource($("#fingerprintSource")?.value || "headless"),
-    datadome_mode: normalizeDatadomeMode($("#datadomeMode")?.value || "headless"),
-    mtr_runtime: normalizeMtrRuntime($("#mtrRuntime")?.value || "headless"),
+    fingerprint_source: normalizeFingerprintSource($("#fingerprintSource")?.value || "random"),
+    datadome_mode: normalizeDatadomeMode($("#datadomeMode")?.value || "protocol"),
+    mtr_runtime: normalizeMtrRuntime($("#mtrRuntime")?.value || "python_generated"),
     buyer_identity_mode: normalizeBuyerIdentityMode($("#buyerIdentityMode")?.value || "legacy"),
   };
 }
 
 function loadRuntimePrefs() {
   try {
-    // Brazil Web: runtime selects use HTML defaults (headless), not localStorage.
-    // Clear legacy sticky auto/roxy prefs so UI matches Brazil default on refresh.
+    // Default pure protocol stack (no Chromium/Roxy popup).
+    // Clear legacy sticky auto/roxy/headless prefs so UI stays protocol-first.
     try {
       localStorage.removeItem(FP_KEY);
       localStorage.removeItem(DD_KEY);
       localStorage.removeItem(MTR_KEY);
       localStorage.removeItem(RUNTIME_KEY);
     } catch (e0) {}
-    setSelectIfValid(document.querySelector("#fingerprintSource"), "headless", "headless");
-    setSelectIfValid(document.querySelector("#datadomeMode"), "headless", "headless");
-    setSelectIfValid(document.querySelector("#mtrRuntime"), "headless", "headless");
+    setSelectIfValid(document.querySelector("#fingerprintSource"), "random", "random");
+    setSelectIfValid(document.querySelector("#datadomeMode"), "protocol", "protocol");
+    setSelectIfValid(document.querySelector("#mtrRuntime"), "python_generated", "python_generated");
     const sb = localStorage.getItem(SMSBOWER_ON_KEY);
     if (sb != null && document.querySelector("#smsbowerEnabled")) {
       document.querySelector("#smsbowerEnabled").checked = sb === "1";
@@ -1021,4 +1021,3 @@ health();
 refreshJobs().then(() => pollCurrent(true));
 setInterval(health, 8000);
 setInterval(refreshJobs, 5000);
-state.pollTimer = setInterval(() => pollCurrent(false), 1000);

@@ -31,7 +31,7 @@ from paypal.models import (
     generate_card,
     generate_random_email,
 )
-from paypal.oaipy_data import generate_user as generate_country_user, generate_card as generate_country_card
+from paypal.oaipy_data import generate_user as generate_country_user, generate_card as generate_country_card, generate_address as generate_country_address
 from paypal.protocol import build_protocol, format_billing_line1, format_billing_line2, should_send_identity, ProtocolContext
 from paypal.regions import normalize_phone, get_region
 from paypal.runtime_config import resolve_and_apply
@@ -469,7 +469,11 @@ class PayPalFlow:
         return (locale or "en").lower()
 
     def _short_content_identifier(self) -> str:
-        return f"{self._content_country()}:{self._content_lang()}:compliance.signupTerms"
+        try:
+            from paypal.country_profiles import short_content_identifier
+            return short_content_identifier(self._content_country(), self._content_lang())
+        except Exception:
+            return f"{self._content_country()}:{self._content_lang()}:compliance.signupTerms"
 
     @staticmethod
     def _is_short_content_identifier_value(value: str) -> bool:
@@ -578,6 +582,63 @@ class PayPalFlow:
         if status_code == 200 and "captcha" in lower and "datadome" in lower and "interstitial" in lower:
             return True
         return False
+
+    @staticmethod
+    def _modxo_redirect_reason(url_or_text: str) -> str:
+        """Return modxo_redirect_reason query value from a URL or response body snippet."""
+        if not url_or_text:
+            return ""
+        try:
+            parsed = urllib.parse.urlparse(url_or_text)
+            if parsed.scheme or parsed.path.startswith("/") or "modxo_redirect_reason=" in (parsed.query or ""):
+                values = urllib.parse.parse_qs(parsed.query).get("modxo_redirect_reason") or []
+                if values:
+                    return str(values[0] or "").strip()
+        except Exception:
+            pass
+        match = re.search(r'modxo_redirect_reason=([^&\s"\'<>]+)', url_or_text, re.I)
+        if not match:
+            return ""
+        try:
+            return urllib.parse.unquote(match.group(1)).strip()
+        except Exception:
+            return match.group(1).strip()
+
+    @classmethod
+    def _raise_if_ineligible_modxo_redirect(cls, url_or_text: str, *, source: str = "") -> None:
+        """Fail fast when PayPal marks the BA/session ineligible for guest checkout."""
+        reason = cls._modxo_redirect_reason(url_or_text)
+        if reason.lower() != "ineligible":
+            return
+        where = f" ({source})" if source else ""
+        raise RuntimeError(
+            "PayPal returned modxo_redirect_reason=ineligible"
+            f"{where}: BA token/session is not eligible for guest create-account checkout. "
+            "Refresh the BA token from a valid checkout entry point; this is not recoverable by "
+            "Phase 2 retries or by reusing the same blocked session."
+        )
+
+    def _raise_if_phase0_still_datadome_blocked(self, status_code: int, html: str) -> None:
+        """Hard-stop only for browser DataDome modes; protocol continues like peer."""
+        if not self._looks_like_hard_datadome_block(status_code, html):
+            return
+        self._phase0_datadome_blocked = True
+        mode = self._datadome_mode()
+        # openai-paypal peer defaults to protocol and keeps going after challenge HTML
+        # once client-id/cookie edges are captured. Local-only runs should match that.
+        if mode not in {"roxy", "headless"}:
+            logger.warning(
+                "Phase 0 still shows DataDome/challenge HTML after load (status={}); "
+                "continuing with protocol fallback (mode={}) instead of hard-failing Phase 1/2.",
+                int(status_code or 0),
+                mode,
+            )
+            return
+        raise RuntimeError(
+            "Phase 0 still blocked by DataDome/challenge page after load "
+            f"(status={int(status_code or 0)}). Fix proxy/IP reputation or solve DataDome "
+            "(headless/roxy) before continuing; refusing Phase 1/2 on challenge HTML."
+        )
 
     def _capture_datadome_clientid(self, html: str) -> None:
         if self._datadome_mode() == "off":
@@ -994,16 +1055,31 @@ class PayPalFlow:
         return mode
 
     def _signup_context_risk_mode(self) -> str:
+        """Resolve signup-context risk runtime without forcing headless.
+
+        Protocol/off must stay pure HTTP (no Chromium/Roxy popup). Headless and
+        Roxy only run when the user/runtime explicitly selected them.
+        """
         current_mode = self._risk_signals_mode()
         requested_mode = str(getattr(self, "_requested_risk_signals_mode", "") or "")
         runtime_source = str(getattr(self.state, "risk_signals_runtime_source", "") or "")
+
+        # Explicit user/runtime knobs always win over previous browser runtime state.
+        if current_mode == "protocol" or requested_mode == "protocol":
+            return "protocol"
+        if current_mode == "off" or requested_mode == "off":
+            return "off"
+        if current_mode == "headless" or requested_mode == "headless":
+            return "headless"
         if (
             current_mode in {"roxy", "auto"}
             or requested_mode in {"roxy", "auto"}
             or runtime_source == "roxy"
         ) and not self._roxy_runtime_disabled_reason:
             return "roxy"
-        return "headless"
+        if runtime_source in {"headless", "headless_optimized"}:
+            return "headless"
+        return "protocol"
 
     @staticmethod
     def _risk_roxy_wait_seconds() -> float:
@@ -1385,6 +1461,130 @@ class PayPalFlow:
             )
             return False
 
+    def _protocol_complement_signup_context_risk_signals(self, signup_url: str, token: str, missing: list[str]) -> list[str]:
+        """Peer-aligned protocol fill for signup-context signals headless could not emit."""
+        missing_set = {str(item) for item in missing if str(item)}
+        # Pure protocol path (no browser run) should emit the full required set.
+        if not missing_set:
+            missing_set = set(_PHASE1_BROWSER_REQUIRED_SIGNALS)
+        referer = signup_url or "https://www.paypal.com/checkoutweb/signup"
+        filled: list[str] = []
+        try:
+            if missing_set.intersection({"fraudnet_p1", "fraudnet_p2", "fraudnet_w", "identity_di_log"}):
+                send_da_bootstrap(self.session, referer=referer, include_ddbm=True)
+            if missing_set.intersection({"fraudnet_p1", "fraudnet_p2", "fraudnet_w"}):
+                send_fraudnet_rdt(
+                    self.session,
+                    token,
+                    app_id="CHECKOUTUINODEWEB_ONBOARDING_LITE",
+                    referer=referer,
+                )
+                send_device_fingerprint(
+                    self.session,
+                    token,
+                    app_id="CHECKOUTUINODEWEB_ONBOARDING_LITE",
+                    referer=referer,
+                    wrapped=True,
+                    page_url=referer,
+                    page_referer="",
+                    include_pa=True,
+                )
+                filled.extend(sorted(missing_set.intersection({"fraudnet_p1", "fraudnet_p2", "fraudnet_w"})))
+            if "identity_di_log" in missing_set:
+                send_identity_di_log(self.session, token, referer=referer, eligible=True)
+                filled.append("identity_di_log")
+            if "datadog_rum" in missing_set:
+                try:
+                    self._send_datadog_rum_view(
+                        self.session,
+                        referer,
+                        token,
+                        referrer=referer,
+                        api="fetch",
+                    )
+                    self._send_datadog_rum_action(
+                        self.session,
+                        "signup_context_protocol_complement",
+                        referer,
+                        referrer=referer,
+                        api="fetch",
+                    )
+                    filled.append("datadog_rum")
+                except Exception as exc:
+                    logger.debug("Protocol datadog complement failed: {}", exc)
+        except Exception as exc:
+            logger.warning("Protocol signup-context signal complement failed: {}", self._safe_error_text(exc))
+        if filled:
+            logger.info(
+                "Protocol complemented signup-context signals: {}",
+                ",".join(filled),
+            )
+        return filled
+
+    def _send_signup_context_risk_signals_with_protocol(self, signup_url: str, token: str) -> bool:
+        """Emit fraudnet/identity/datadog signup-context packets over pure HTTP."""
+        mode = self._signup_context_risk_mode()
+        if mode == "off":
+            self.state.risk_signals_runtime_source = "protocol_off"
+            self.state.risk_signals_browser_result = {
+                "ok": True,
+                "signup_context": {
+                    "ok": True,
+                    "runtime": "protocol_off",
+                    "observed": [],
+                    "missing": [],
+                    "required_signals": list(_PHASE1_BROWSER_REQUIRED_SIGNALS),
+                    "required_missing": [],
+                },
+            }
+            logger.info("Signup-context risk signals skipped (mode=off)")
+            return True
+
+        filled = self._protocol_complement_signup_context_risk_signals(
+            signup_url,
+            token,
+            list(_PHASE1_BROWSER_REQUIRED_SIGNALS),
+        )
+        remaining = [item for item in _PHASE1_BROWSER_REQUIRED_SIGNALS if item not in set(filled)]
+        signup_context_result = {
+            "ok": not remaining,
+            "runtime": "protocol",
+            "status": 200 if filled else 0,
+            "url": signup_url,
+            "reason": "protocol_signup_context",
+            "app_id": "CHECKOUTUINODEWEB_ONBOARDING_LITE",
+            "correlation_id": token,
+            "observed": list(filled),
+            "missing": remaining,
+            "required_signals": list(_PHASE1_BROWSER_REQUIRED_SIGNALS),
+            "required_missing": remaining,
+            "protocol_complemented": list(filled),
+            "required_missing_after_protocol": remaining,
+        }
+        previous = getattr(self.state, "risk_signals_browser_result", {})
+        if isinstance(previous, dict):
+            merged = dict(previous)
+            merged["signup_context"] = signup_context_result
+            merged["ok"] = bool(previous.get("ok")) or bool(filled)
+            self.state.risk_signals_browser_result = merged
+        else:
+            self.state.risk_signals_browser_result = {
+                "ok": bool(filled),
+                "signup_context": signup_context_result,
+            }
+        self.state.risk_signals_runtime_source = "protocol" if filled else "protocol_partial"
+        logger.info(
+            "Signup context risk signals executed through protocol observed={} missing={}",
+            ",".join(filled) or "<none>",
+            ",".join(remaining) or "<none>",
+        )
+        if remaining and strict_browser_risk_enabled():
+            raise RuntimeError(
+                "Protocol signup-context risk runtime is missing required signals: "
+                + ",".join(remaining)
+            )
+        return bool(filled)
+
     def _send_signup_context_risk_signals_with_headless(self, signup_url: str, token: str) -> bool:
         mode = self._signup_context_risk_mode()
         if mode != "headless":
@@ -1521,9 +1721,36 @@ class PayPalFlow:
                 diagnostic_path = str(result.get("missing_diagnostic_path") or "")
                 if diagnostic_path:
                     message += f" diagnostic={diagnostic_path}"
-                if strict_browser_risk_enabled():
-                    raise RuntimeError(message)
                 logger.warning(message)
+                complemented = self._protocol_complement_signup_context_risk_signals(
+                    signup_url,
+                    token,
+                    required_missing_text,
+                )
+                if complemented:
+                    remaining = [item for item in required_missing_text if item not in set(complemented)]
+                    signup_context_result["protocol_complemented"] = complemented
+                    signup_context_result["required_missing_after_protocol"] = remaining
+                    required_missing_text = remaining
+                    required_missing = remaining
+                    # Mirror peer protocol fallback: once protocol risk packets are sent,
+                    # treat the browser-risk gap as non-fatal for local headless mode.
+                    if not remaining:
+                        browser_ok = True
+                        signup_context_result["ok"] = True
+                        self.state.risk_signals_runtime_source = "headless_protocol_complement"
+                        previous = getattr(self.state, "risk_signals_browser_result", {})
+                        if isinstance(previous, dict):
+                            merged = dict(previous)
+                            merged["signup_context"] = signup_context_result
+                            merged["ok"] = True
+                            self.state.risk_signals_browser_result = merged
+                if required_missing_text and strict_browser_risk_enabled():
+                    raise RuntimeError(
+                        "Headless signup-context risk runtime is missing required browser signals: "
+                        + ",".join(required_missing_text)
+                        + (f" diagnostic={diagnostic_path}" if diagnostic_path else "")
+                    )
             return browser_ok
         except Exception as exc:
             error_text = self._safe_error_text(exc)
@@ -2343,6 +2570,18 @@ class PayPalFlow:
     @staticmethod
     def _should_retry_full_flow_exception(error: Exception) -> bool:
         text = str(error)
+        # Hard environment / token-eligibility failures will not recover by regenerating
+        # signup data on the same blocked proxy/session or BA token.
+        non_retry_markers = (
+            "Phase 0 still blocked by DataDome",
+            "DataDome challenge unresolved",
+            "DataDome did not produce a datadome cookie",
+            "modxo_redirect_reason=ineligible",
+            "not eligible for guest create-account",
+            "generic-error redirect",
+        )
+        if any(marker in text for marker in non_retry_markers):
+            return False
         retry_markers = (
             "Signup failed: card was rejected",
             "Signup failed: no usable access token",
@@ -2374,7 +2613,7 @@ class PayPalFlow:
             pass
 
         self.user = generate_user(current_phone, country=str(self.address.country or 'TH'))
-        self.card = generate_card(proxy_url=self.proxy_config.url)
+        self.card = generate_card(proxy_url=self.proxy_config.url, country=str(getattr(self.address, 'country', None) or 'TH'))
         self.address = current_address
         self.state = SessionState(ba_token=self.ba_token)
         self._buyer_context_bound = False
@@ -2502,9 +2741,12 @@ class PayPalFlow:
                     }, data={"adsddtoken": ""})
                     self._capture_datadome_clientid(resp.text)
                     if self._looks_like_hard_datadome_block(resp.status_code, getattr(resp, "text", "") or ""):
-                        raise RuntimeError(
-                            "DataDome challenge unresolved after empty-token POST; "
-                            "switch DataDome to headless/roxy or solve the challenge first"
+                        # Peer keeps going after protocol empty-token POST; later phases
+                        # still rely on client-id header replay / session cookies.
+                        logger.warning(
+                            "DataDome challenge HTML still present after empty-token POST "
+                            "(status={}); continuing protocol path like openai-paypal peer.",
+                            int(getattr(resp, "status_code", 0) or 0),
                         )
 
         if resp.status_code == 302:
@@ -2534,6 +2776,9 @@ class PayPalFlow:
         self._capture_datadome_clientid(html)
         self._capture_mtr_metadata(html, str(resp.url))
         logger.info(f"Page loaded: {resp.status_code}, {len(html)} bytes")
+        # Hard-stop on unresolved challenge pages so static ModXO action ids are never
+        # applied to DataDome HTML and Phase 2 does not thrash without an EC token.
+        self._raise_if_phase0_still_datadome_blocked(resp.status_code, html)
         self._apply_modxo_inline_metadata(html)
         self._extract_modxo_action_ids(html, str(resp.url))
 
@@ -2560,6 +2805,25 @@ class PayPalFlow:
                     "EC Token already present on approval page: {}",
                     sanitize_for_log({"ec_token": self.state.ec_token})["ec_token"],
                 )
+
+        static_only = False
+        if self._modxo_static_action_ids_enabled():
+            static_vals = set(_MODXO_STATIC_ACTION_IDS.values())
+            current_vals = {
+                getattr(self.state, attr, "")
+                for attr in _MODXO_STATIC_ACTION_IDS
+                if getattr(self.state, attr, "")
+            }
+            static_only = bool(current_vals) and current_vals.issubset(static_vals)
+        logger.info(
+            "Phase 0 ModXO readiness: status={} ctx={} ssrt={} action_ids_complete={} static_only={} datadome_cookie={}",
+            resp.status_code,
+            bool(getattr(self.state, "ctx_id", "")),
+            bool(getattr(self.state, "ssrt", "")),
+            self._modxo_named_action_ids_complete(),
+            static_only,
+            bool(getattr(self.state, "datadome_cookie", "")),
+        )
 
     @staticmethod
     def _extract_window_initial_data(html: str) -> dict[str, object]:
@@ -3421,10 +3685,23 @@ class PayPalFlow:
     @staticmethod
     def _find_access_token(value) -> str:
         """Find an accessToken recursively in GraphQL data/errorData."""
+        token_keys = {
+            "accesstoken",
+            "access_token",
+            "euattoken",
+            "euat_token",
+            "euat",
+            "idtoken",
+            "id_token",
+        }
         if isinstance(value, dict):
             for key, item in value.items():
-                if key == "accessToken" and isinstance(item, str) and item:
-                    return item
+                key_l = str(key).lower().replace("-", "")
+                if key_l in token_keys and isinstance(item, str) and item.strip():
+                    token = item.strip()
+                    # Prefer real PayPal member tokens over short noise.
+                    if len(token) >= 20:
+                        return token
                 found = PayPalFlow._find_access_token(item)
                 if found:
                     return found
@@ -3433,6 +3710,18 @@ class PayPalFlow:
                 found = PayPalFlow._find_access_token(item)
                 if found:
                     return found
+        elif isinstance(value, str):
+            text = value.strip()
+            # Some contingencies bury tokens inside JSON-ish strings.
+            if '"accessToken"' in text or '"access_token"' in text:
+                try:
+                    parsed = json.loads(text)
+                except Exception:
+                    parsed = None
+                if parsed is not None:
+                    found = PayPalFlow._find_access_token(parsed)
+                    if found:
+                        return found
         return ""
 
     def _sync_euat_token_from_cookie(self) -> str:
@@ -5580,6 +5869,17 @@ class PayPalFlow:
         logger.info("Step 1: Initiating 2FA phone confirmation for {}...", self._masked_phone())
         _cc = self._content_country()
         _lang = self._content_lang()
+        local = str(getattr(self.user, "phone_local", "") or "")
+        local_digits = "".join(ch for ch in local if ch.isdigit())
+        logger.info(
+            "2FA phone payload meta: phoneCountry={} locale={}/{} local_len={} local_prefix={} e164={}",
+            _cc,
+            _cc,
+            _lang,
+            len(local_digits),
+            (local_digits[:2] + "…") if len(local_digits) >= 2 else (local_digits or "<empty>"),
+            self._masked_phone(),
+        )
         send_weasley_log(
             self.session,
             self.state.ec_token,
@@ -5611,14 +5911,28 @@ class PayPalFlow:
         result_obj = initiate_result[0] if isinstance(initiate_result, list) else initiate_result
         tfa_data = result_obj.get("data", {}).get(
             "initiateRiskBasedTwoFactorPhoneConfirmation", {}
-        )
-        auth_id = tfa_data.get("authId", "")
-        challenge_id = tfa_data.get("challengeId", "")
-        state = tfa_data.get("state", "")
+        ) or {}
+        auth_id = tfa_data.get("authId", "") or ""
+        challenge_id = tfa_data.get("challengeId", "") or ""
+        state = str(tfa_data.get("state", "") or "")
         logger.info("2FA state: {}, authId=<redacted>, challengeId=<redacted>", state)
 
         if not auth_id or not challenge_id:
-            raise RuntimeError("Failed to get authId/challengeId from 2FA initiation")
+            state_u = state.upper()
+            if state_u == "NUMBER_NOT_SUPPORTED":
+                raise RuntimeError(
+                    "NUMBER_NOT_SUPPORTED: PayPal rejected this phone for SMS OTP "
+                    f"(phoneCountry={_cc}, local_len={len(local_digits)}). "
+                    "Use a real mobile that PayPal accepts in this market; virtual/VoIP numbers are often blocked."
+                )
+            if state_u:
+                raise RuntimeError(
+                    f"2FA initiate failed: state={state} (no authId/challengeId); "
+                    f"phoneCountry={_cc}, local_len={len(local_digits)}"
+                )
+            raise RuntimeError(
+                f"Failed to get authId/challengeId from 2FA initiation (phoneCountry={_cc})"
+            )
         return auth_id, challenge_id
 
     def _confirm_2fa_phone_confirmation(
@@ -5771,12 +6085,21 @@ class PayPalFlow:
         return f"{exp_parts[0]}/{exp_parts[1]}" if len(exp_parts) == 2 else self.card.expiry
 
     def _dob_payload(self) -> dict[str, str]:
-        dob_parts = self.user.dob.split("/")
-        return (
-            {"day": dob_parts[0], "month": dob_parts[1], "year": dob_parts[2]}
-            if len(dob_parts) == 3
-            else {}
-        )
+        raw = str(getattr(self.user, "dob", "") or "").strip()
+        dob_parts = [part.strip() for part in raw.split("/") if part.strip()]
+        if len(dob_parts) != 3:
+            # Never send an empty DateOfBirth object; PayPal's onboardAccount
+            # resolver can crash with opaque FAILURE ("Cannot destructure...").
+            return {"day": "15", "month": "06", "year": "1990"}
+        day, month, year = dob_parts
+        try:
+            return {
+                "day": f"{int(day):02d}",
+                "month": f"{int(month):02d}",
+                "year": f"{int(year):04d}",
+            }
+        except Exception:
+            return {"day": "15", "month": "06", "year": "1990"}
 
     def _billing_line1(self) -> str:
         """Country-shaped line1 (Brazil-depth signup uses regional address form)."""
@@ -5792,6 +6115,161 @@ class PayPalFlow:
                 return f"{street}, {house}".strip(", ")
             return street
 
+    @staticmethod
+    def _omit_null_signup_fields(payload: dict[str, object]) -> dict[str, object]:
+        """Drop explicit nulls so GraphQL optional inputs match browser omit behavior."""
+        cleaned: dict[str, object] = {}
+        for key, value in payload.items():
+            if value is None:
+                continue
+            cleaned[key] = value
+        return cleaned
+
+    @staticmethod
+    def _diag_write_roots() -> list[Path]:
+        roots: list[Path] = []
+        seen: set[str] = set()
+        candidates = [
+            Path(r"C:\\tmp"),
+            Path("/tmp"),
+            Path(__file__).resolve().parents[1] / "var",
+            Path(__file__).resolve().parents[1] / "cache",
+        ]
+        for root in candidates:
+            key = str(root)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                continue
+            roots.append(root)
+        return roots
+
+    @classmethod
+    def _diag_write_json(cls, name: str, payload: object) -> list[str]:
+        """Best-effort diagnostic dump for Windows + *nix temp layouts."""
+        written: list[str] = []
+        try:
+            body = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+        except Exception as exc:
+            body = json.dumps({"error": f"serialize_failed: {exc}"}, ensure_ascii=False)
+        for root in cls._diag_write_roots():
+            path = root / name
+            try:
+                path.write_text(body, encoding="utf-8")
+                written.append(str(path))
+            except Exception:
+                continue
+        return written
+
+    def _identity_document_payload(self) -> dict[str, str] | None:
+        """Only send identityDocument when the country protocol requires a real value."""
+        country = str(self.address.country or getattr(getattr(self, "protocol", None), "code", "") or "").upper()
+        protocol = getattr(self, "protocol", None)
+        send_doc = bool(getattr(protocol, "send_identity_document", False)) or should_send_identity(country)
+        if not send_doc:
+            return None
+        identity_type = (
+            getattr(protocol, "identity_type", None)
+            or ("CPF" if country == "BR" else None)
+        )
+        if not identity_type:
+            return None
+        raw_value = (
+            getattr(self.user, "cpf", "")
+            or getattr(self.user, "national_id", "")
+            or ""
+        )
+        value = str(raw_value).replace(".", "").replace("-", "").strip()
+        if not value:
+            return None
+        return {"type": str(identity_type), "value": value}
+
+    @staticmethod
+    def _form_safe_address_text(value: str, *, fallback: str = "") -> str:
+        """Romanize and keep printable ASCII for PayPal form address fields."""
+        try:
+            from unidecode import unidecode
+        except Exception:  # pragma: no cover
+            def unidecode(s: str) -> str:  # type: ignore
+                return s
+
+        text = unidecode(str(value or ""))
+        text = "".join(ch for ch in text if ch.isprintable() and ord(ch) < 128)
+        text = " ".join(text.replace(",", " ").split()).strip(" -/'")
+        return text[:80].strip() or fallback
+
+    def _ensure_form_safe_billing_address(self) -> None:
+        """Replace invalid/Thai-script/ST-state addresses before SignUpNewMember.
+
+        Opaque onboardAccount FAILURE ("Cannot destructure property 'index'...")
+        is often caused by incoherent TH address payloads. Prefer curated ASCII
+        locations for TH instead of Faker th_TH noise.
+        """
+        country = str(
+            getattr(self.address, "country", "")
+            or getattr(getattr(self, "protocol", None), "code", "")
+            or "TH"
+        ).upper()
+        raw_fields = {
+            "street": str(getattr(self.address, "street", "") or ""),
+            "house_number": str(getattr(self.address, "house_number", "") or ""),
+            "district": str(getattr(self.address, "district", "") or ""),
+            "city": str(getattr(self.address, "city", "") or ""),
+            "state": str(getattr(self.address, "state", "") or ""),
+            "postal_code": str(getattr(self.address, "postal_code", "") or ""),
+        }
+        street = self._form_safe_address_text(raw_fields["street"], fallback="")
+        house = self._form_safe_address_text(raw_fields["house_number"], fallback="")
+        district = self._form_safe_address_text(raw_fields["district"], fallback="")
+        city = self._form_safe_address_text(raw_fields["city"], fallback="")
+        state = self._form_safe_address_text(raw_fields["state"], fallback="")
+        postal = "".join(
+            ch for ch in raw_fields["postal_code"] if ch.isalnum() or ch in "- "
+        )[:16].strip()
+
+        invalid_state = (not state) or state.upper() in {"ST", "STATE", "N/A", "NA", "NONE"}
+        missing_core = not street or not city or not postal
+        non_ascii_raw = any(
+            any(ord(ch) >= 128 for ch in raw_fields[key])
+            for key in ("street", "district", "city", "state")
+        )
+        needs_regen = country == "TH" and (invalid_state or missing_core or non_ascii_raw)
+        if needs_regen:
+            try:
+                fresh = generate_country_address(country=str(getattr(self.address, "country", None) or "TH"))
+                self.address = fresh
+                self.address.country = "TH"
+                self._signup_billing_address_prepared = False
+                self._billing_address_autocomplete_succeeded = False
+                logger.info(
+                    "Replaced unsafe TH billing address with curated form-safe "
+                    "address: {}, {}, {} {}",
+                    fresh.street,
+                    fresh.city,
+                    fresh.state,
+                    fresh.postal_code,
+                )
+                return
+            except Exception as exc:
+                logger.warning(
+                    "TH address regenerate failed; applying ASCII sanitization only: {}",
+                    exc,
+                )
+
+        self.address.street = street or ("Sukhumvit Road" if country == "TH" else "Main Street")
+        self.address.house_number = house or str(random.randint(12, 999))
+        self.address.district = district or city or ("Pathum Wan" if country == "TH" else "Center")
+        self.address.city = city or ("Bangkok" if country == "TH" else "Capital")
+        if invalid_state:
+            self.address.state = "Bangkok" if country == "TH" else (country or "ST")
+        else:
+            self.address.state = state
+        self.address.postal_code = postal or ("10330" if country == "TH" else f"{random.randint(10000,99999)}")
+        self.address.country = country or "TH"
+
     def _build_signup_variables(self, token: str) -> dict[str, object]:
         card_type = self._card_issuer_type()
         if self._content_metadata_is_unresolved() and self.state.content_manifest_url:
@@ -5805,7 +6283,19 @@ class PayPalFlow:
         billing_autocomplete_type = (
             "ANS" if self._billing_address_autocomplete_succeeded else "MANUAL"
         )
-        return {
+        style = getattr(getattr(self, "protocol", None), "address_style", None) or "generic"
+        self._ensure_form_safe_billing_address()
+        line2 = format_billing_line2(style, getattr(self.address, "district", "") or "")
+        phone_local = re.sub(r"\D+", "", str(self.user.phone_local or ""))
+        phone_cc = re.sub(r"\D+", "", str(self.user.phone_country_code or ""))
+        dob_payload = self._dob_payload()
+        if not all(str(dob_payload.get(key) or "").strip() for key in ("day", "month", "year")):
+            raise RuntimeError("Signup aborted: dateOfBirth is incomplete")
+        if not phone_local or not phone_cc:
+            raise RuntimeError("Signup aborted: phone payload is incomplete")
+        first_name = str(self.user.first_name or "").strip() or "Alex"
+        last_name = str(self.user.last_name or "").strip() or "Lee"
+        payload: dict[str, object] = {
             "card": {
                 "cardNumber": self.card.number,
                 "expirationDate": self._card_expiration_date(),
@@ -5815,11 +6305,11 @@ class PayPalFlow:
             },
             "country": self.address.country,
             "email": self.user.email,
-            "firstName": self.user.first_name,
-            "lastName": self.user.last_name,
+            "firstName": first_name,
+            "lastName": last_name,
             "phone": {
-                "countryCode": self.user.phone_country_code.lstrip("+"),
-                "number": self.user.phone_local,
+                "countryCode": phone_cc,
+                "number": phone_local,
                 "type": "MOBILE",
             },
             "supportedThreeDsExperiences": ["IFRAME"],
@@ -5827,7 +6317,7 @@ class PayPalFlow:
             "billingAddress": {
                 "postalCode": self.address.postal_code,
                 "line1": self._billing_line1(),
-                "line2": self.address.district,
+                "line2": line2,
                 "city": self.address.city,
                 "state": self.address.state,
                 "accountQuality": {
@@ -5835,8 +6325,8 @@ class PayPalFlow:
                     "isUserModified": True,
                 },
                 "country": self.address.country,
-                "familyName": self.user.last_name,
-                "givenName": self.user.first_name,
+                "familyName": last_name,
+                "givenName": first_name,
             },
             "shippingAddress": {
                 "postalCode": "",
@@ -5848,30 +6338,19 @@ class PayPalFlow:
                     "isUserModified": False,
                 },
                 "country": self.address.country,
-                "familyName": self.user.last_name,
-                "givenName": self.user.first_name,
+                "familyName": last_name,
+                "givenName": first_name,
             },
             "contentIdentifier": content_identifier,
             "marketingOptOut": True,
             "password": self.user.password,
-            "dateOfBirth": self._dob_payload(),
-            "identityDocument": (
-                {
-                    "type": (
-                        getattr(getattr(self, "protocol", None), "identity_type", None)
-                        or "CPF"
-                    ),
-                    "value": getattr(self.user, "cpf", "") or getattr(self.user, "national_id", "") or "",
-                }
-                if (
-                    getattr(getattr(self, "protocol", None), "send_identity_document", False)
-                    or str(self.address.country or "").upper() == "BR"
-                )
-                else None
-            ),
-            "crsData": None,
+            "dateOfBirth": dob_payload,
             "legalAgreements": {},
         }
+        identity_document = self._identity_document_payload()
+        if identity_document is not None:
+            payload["identityDocument"] = identity_document
+        return self._omit_null_signup_fields(payload)
 
     def _send_address_autocomplete(self, token: str) -> None:
         self._billing_address_autocomplete_succeeded = False
@@ -5969,6 +6448,8 @@ class PayPalFlow:
                 sanitize_for_log({"token": installment_token or ""})["token"] or "<missing>",
             )
 
+        # Sanitize TH/Faker address noise before autocomplete + SignUpNewMember.
+        self._ensure_form_safe_billing_address()
         if not getattr(self, "_signup_billing_address_prepared", False):
             self._send_address_autocomplete(token)
             self._signup_billing_address_prepared = True
@@ -5979,12 +6460,35 @@ class PayPalFlow:
             )
 
         risk_mode = self._signup_context_risk_mode()
-        if risk_mode == "headless":
-            self._send_signup_context_risk_signals_with_headless(signup_url, token)
+        if risk_mode in {"protocol", "off"}:
+            # Pure protocol path: never open Chromium/Roxy for signup-context risk.
+            self._send_signup_context_risk_signals_with_protocol(signup_url, token)
+        elif risk_mode == "headless":
+            try:
+                self._send_signup_context_risk_signals_with_headless(signup_url, token)
+            except Exception as headless_exc:
+                logger.warning(
+                    "Headless signup-context risk failed; falling back to protocol: {}",
+                    self._safe_error_text(headless_exc),
+                )
+                self._send_signup_context_risk_signals_with_protocol(signup_url, token)
         elif risk_mode in {"roxy", "auto"} or self._roxy_risk_runtime_active():
             sent_signup_context_risk = self._send_signup_context_risk_signals_with_roxy(signup_url, token)
-            if not sent_signup_context_risk and self._signup_context_risk_mode() == "headless":
-                self._send_signup_context_risk_signals_with_headless(signup_url, token)
+            if not sent_signup_context_risk:
+                fallback_mode = self._signup_context_risk_mode()
+                if fallback_mode == "headless":
+                    try:
+                        self._send_signup_context_risk_signals_with_headless(signup_url, token)
+                    except Exception as headless_exc:
+                        logger.warning(
+                            "Roxy/headless signup-context risk failed; falling back to protocol: {}",
+                            self._safe_error_text(headless_exc),
+                        )
+                        self._send_signup_context_risk_signals_with_protocol(signup_url, token)
+                else:
+                    self._send_signup_context_risk_signals_with_protocol(signup_url, token)
+        else:
+            self._send_signup_context_risk_signals_with_protocol(signup_url, token)
 
         self._strict_signup_preflight_or_raise()
 
@@ -6022,10 +6526,32 @@ class PayPalFlow:
             lang=self._content_lang(),
         )
         signup_variables = self._build_signup_variables(token)
+        written = self._diag_write_json(
+            "paypal_signup_variables_last.json",
+            {
+                "token_kind": "EC" if self._is_ec_token(token) else "OTHER",
+                "country": self.address.country,
+                "content_identifier": signup_variables.get("contentIdentifier"),
+                "has_identity_document": "identityDocument" in signup_variables,
+                "has_crs_data": "crsData" in signup_variables,
+                "variables": sanitize_for_log(signup_variables),
+            },
+        )
+        if written:
+            logger.info("Signup variables diagnostic saved: {}", written[0])
         signup_result = self._post_signup_with_authchallenge_ignore(
             token,
             signup_url,
             signup_variables,
+        )
+        self._diag_write_json(
+            "paypal_gql_SignUpNewMemberMutation_last.json",
+            {
+                "token_kind": "EC" if self._is_ec_token(token) else "OTHER",
+                "country": self.address.country,
+                "content_identifier": signup_variables.get("contentIdentifier"),
+                "result": sanitize_for_log(signup_result),
+            },
         )
         logger.info(
             "Signup result (sanitized): {}",
@@ -6387,6 +6913,38 @@ class PayPalFlow:
                 return True
         return False
 
+    @staticmethod
+    def _is_opaque_onboard_failure_retryable(errors: list[dict[str, Any]]) -> bool:
+        """Retry in-place when PayPal returns a non-structured onboardAccount FAILURE.
+
+        Browser/Node sometimes surfaces internal JS-style messages such as
+        "Cannot destructure property 'index' of 'error'..." without checkpoints
+        or errorData. These are usually payload/session shape issues and can
+        clear after regenerating email/card while keeping the confirmed phone.
+        """
+        for err in errors or []:
+            path = err.get("path") or []
+            path_l = [str(item).lower() for item in path] if isinstance(path, list) else [str(path).lower()]
+            if path_l and "onboardaccount" not in path_l and "signupnewmember" not in path_l:
+                continue
+            message = str(err.get("message") or "")
+            message_l = message.lower()
+            extensions = err.get("extensions") if isinstance(err.get("extensions"), dict) else {}
+            error_class = str(extensions.get("class") or "").upper()
+            checkpoints = err.get("checkpoints") or []
+            error_data = err.get("errorData")
+            has_structured = bool(checkpoints) or bool(error_data)
+            if has_structured:
+                continue
+            if "cannot destructure" in message_l or "is undefined" in message_l:
+                return True
+            if error_class == "FAILURE" and message and message not in {
+                "ACCOUNT_ALREADY_EXISTS",
+                "THREE_DS_CHALLENGE_REQUIRED",
+            }:
+                return True
+        return False
+
     def _wait_and_rotate_card(self, reason: str) -> None:
         logger.warning(
             "{}. Waiting before generating a fresh local Visa/MasterCard...",
@@ -6399,7 +6957,7 @@ class PayPalFlow:
             logger.info("Waiting {:.1f}s before next card retry...", delay)
             time.sleep(delay)
 
-        self.card = generate_card(proxy_url=self.proxy_config.url)
+        self.card = generate_card(proxy_url=self.proxy_config.url, country=str(getattr(self.address, 'country', None) or 'TH'))
         logger.info(
             "New generated card for retry: {} exp={}",
             self._masked_card_number(),
@@ -6408,8 +6966,8 @@ class PayPalFlow:
 
     def _wait_and_rotate_signup_identity(self, reason: str, signup_attempt: int) -> None:
         logger.warning(
-            "{}. Retrying SignUpNewMember in-place with fresh account/card info "
-            "while preserving the confirmed phone and billing address...",
+            "{}. Retrying SignUpNewMember in-place with fresh account/card/address "
+            "while preserving the confirmed phone...",
             reason,
         )
         delay = self.card_retry_delay_seconds
@@ -6420,16 +6978,59 @@ class PayPalFlow:
             time.sleep(delay)
 
         current_phone = self.user.phone
-        self.user = generate_user(current_phone, country=str(self.address.country or 'TH'))
-        self.card = generate_card(proxy_url=self.proxy_config.url)
+        country = str(self.address.country or "TH")
+        self.user = generate_user(current_phone, country=country)
+        self.card = generate_card(proxy_url=self.proxy_config.url, country=str(getattr(self.address, 'country', None) or 'TH'))
+        # Opaque create-member failures are often address/profile shape issues.
+        # Keep the confirmed phone, but refresh billing address + email/card.
+        try:
+            self.address = generate_country_address(country=country)
+            self.address.country = country
+        except Exception as exc:
+            logger.warning("Signup identity retry address regenerate failed: {}", exc)
         self.state.user_id = ""
         self.state.euat_token = ""
         self.state.signup_fallback_reason = ""
         self._used_partial_signup_token = False
+        self._signup_billing_address_prepared = False
+        # Force signup-context risk packets to re-emit on the next attempt.
+        # Stale/missing fraudnet-datadog context commonly collapses into opaque
+        # onboardAccount FAILURE without an access token.
+        self.state.risk_signals_runtime_source = ""
+        try:
+            previous = getattr(self.state, "risk_signals_browser_result", {})
+            if isinstance(previous, dict):
+                previous = dict(previous)
+                previous.pop("signup_context", None)
+                self.state.risk_signals_browser_result = previous
+        except Exception:
+            pass
+        # Opaque onboard FAILURE is often tied to stale checkoutweb content
+        # metadata. Refresh before the next SignUpNewMember attempt.
+        try:
+            signup_url = self.state.signup_url or "https://www.paypal.com/checkoutweb/signup"
+            self._ensure_live_signup_content_manifest(referer=signup_url)
+            if self._content_metadata_is_unresolved():
+                self._refresh_signup_content_metadata(referer=signup_url)
+            if self._content_metadata_is_unresolved() and self.state.content_hash:
+                self.state.content_identifier = self._resolved_content_identifier()
+            if self._content_metadata_is_unresolved():
+                self._apply_configured_or_cached_signup_content_metadata()
+        except Exception as exc:
+            logger.warning("Signup content metadata refresh before retry failed: {}", exc)
+        # Best-effort protocol reseed before the next SignUpNewMember attempt.
+        try:
+            signup_url = self.state.signup_url or "https://www.paypal.com/checkoutweb/signup"
+            reseed_token = self.state.ec_token or self.ba_token
+            if self._signup_context_risk_mode() in {"protocol", "off", "headless"}:
+                self._send_signup_context_risk_signals_with_protocol(signup_url, reseed_token)
+                logger.info("Reseeded protocol signup-context risk signals before opaque FAILURE retry")
+        except Exception as exc:
+            logger.warning("Protocol signup-context reseed before retry failed: {}", exc)
         self._on_signup_retry_generated(signup_attempt, reason)
         logger.info(
             "New signup info for retry: email={}, phone={} (preserved), "
-            "card={} exp={}, address={}, {}-{} (preserved)",
+            "card={} exp={}, address={}, {}-{} (refreshed)",
             sanitize_for_log({"email": self.user.email})["email"],
             sanitize_for_log({"phone": self.user.phone})["phone"],
             self._masked_card_number(),
@@ -6538,10 +7139,33 @@ class PayPalFlow:
                 )
                 continue
 
+            if self._is_opaque_onboard_failure_retryable(errors):
+                if attempt >= self.max_card_attempts:
+                    raise RuntimeError(
+                        "Signup failed: opaque onboardAccount FAILURE after "
+                        f"{self.max_card_attempts} in-place signup-info attempts. "
+                        "PayPal rejected create-account without an access token "
+                        f"(last errors: {json.dumps(sanitize_for_log(errors), ensure_ascii=False)[:700]})"
+                    )
+                self._wait_and_rotate_signup_identity(
+                    "opaque onboardAccount FAILURE without access token",
+                    attempt + 1,
+                )
+                continue
+
             break
 
+        content_id = ""
+        try:
+            content_id = self._resolved_content_identifier()
+        except Exception:
+            content_id = str(getattr(self.state, "content_identifier", "") or "")
         raise RuntimeError(
             "Signup failed: no usable access token obtained. "
+            "PayPal onboardAccount did not create a member session. "
+            f"token_kind={'EC' if self._is_ec_token(token) else 'OTHER'} "
+            f"contentIdentifier={content_id or '<missing>'} "
+            f"country={getattr(self.address, 'country', '')} "
             f"Last errors: {json.dumps(sanitize_for_log(last_errors), ensure_ascii=False)[:1000]}"
         )
 
@@ -6567,7 +7191,14 @@ class PayPalFlow:
         redirect_url = self._modxo_action_redirect_url(resp)
         if not redirect_url:
             return resp
-        logger.info(f"Following ModXO action redirect: {redirect_url[:140]}...")
+        if "generic-error" in redirect_url.lower():
+            raise RuntimeError(f"PayPal returned generic-error redirect: {redirect_url}")
+        self._raise_if_ineligible_modxo_redirect(redirect_url, source="ModXO action redirect")
+        logger.info(
+            "Following ModXO action redirect reason={}: {}...",
+            self._modxo_redirect_reason(redirect_url) or "n/a",
+            redirect_url[:140],
+        )
         return self.session.get(
             redirect_url,
             headers={
@@ -6899,7 +7530,15 @@ class PayPalFlow:
                     rsc_resp = post_continue_action(submit_action_id)
             onboarding_url = self._extract_onboarding_redirect(rsc_resp.text)
             if onboarding_url:
-                logger.info(f"Onboarding redirect URL: {onboarding_url[:140]}...")
+                self._raise_if_ineligible_modxo_redirect(
+                    onboarding_url,
+                    source="Continue_To_Payment onboardingRedirectUrl",
+                )
+                logger.info(
+                    "Onboarding redirect URL reason={}: {}...",
+                    self._modxo_redirect_reason(onboarding_url) or "n/a",
+                    onboarding_url[:140],
+                )
                 onboarding_token = self._first_query_value(onboarding_url, "token")
                 if self._is_ec_token(onboarding_token):
                     self.state.ec_token = onboarding_token
@@ -6922,6 +7561,20 @@ class PayPalFlow:
             elif rsc_resp.status_code in (301, 302, 303, 307, 308) or rsc_resp.headers.get("x-action-redirect"):
                 resp = self._follow_modxo_action_redirect(rsc_resp, pay_page_url)
         except Exception as e:
+            # Eligibility / hard-block failures must not fall through to the legacy
+            # compact form POST (that hides the real root cause as "no EC token").
+            message = str(e)
+            hard_fail_markers = (
+                "modxo_redirect_reason=ineligible",
+                "not eligible for guest create-account",
+                "generic-error redirect",
+                "Phase 0 still blocked by DataDome",
+                "DataDome challenge unresolved",
+            )
+            if any(marker in message for marker in hard_fail_markers):
+                raise
+            if isinstance(e, (PayPalAuthChallenge,)):
+                raise
             logger.warning(f"Browser-like ModXO server-action path failed: {e}")
 
         if resp is None:
@@ -6955,7 +7608,12 @@ class PayPalFlow:
                 redirect_url = f"https://www.paypal.com{redirect_url}"
             if "generic-error" in (redirect_url or "").lower():
                 raise RuntimeError(f"PayPal returned generic-error redirect: {redirect_url}")
-            logger.info(f"Following redirect: {redirect_url[:100]}...")
+            self._raise_if_ineligible_modxo_redirect(redirect_url, source="Phase 2 redirect chain")
+            logger.info(
+                "Following redirect reason={}: {}...",
+                self._modxo_redirect_reason(redirect_url) or "n/a",
+                (redirect_url or "")[:100],
+            )
             resp = self.session.get(redirect_url, headers={
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                 "Upgrade-Insecure-Requests": "1",
@@ -7083,11 +7741,21 @@ class PayPalFlow:
                 )
 
         if not self._is_ec_token(self.state.ec_token):
+            final_url = str(getattr(resp, "url", "") or "")
+            final_html = str(getattr(resp, "text", "") or html or "")
+            self._raise_if_ineligible_modxo_redirect(final_url, source="final checkout URL")
+            self._raise_if_ineligible_modxo_redirect(final_html, source="final checkout page")
+            redirect_reason = (
+                self._modxo_redirect_reason(final_url)
+                or self._modxo_redirect_reason(final_html)
+                or "n/a"
+            )
             raise RuntimeError(
                 "Create account flow did not produce an EC checkout token (no valid EC token). "
                 "The original BA token cannot be used for checkoutweb signup "
                 "or InstallmentOptionsQuery; check whether the BA token is "
-                "expired/invalid or the ModXO server-action response changed."
+                "expired/invalid or the ModXO server-action response changed. "
+                f"last_url={final_url[:180]!r} modxo_redirect_reason={redirect_reason}."
             )
 
         if self._content_metadata_is_unresolved():
