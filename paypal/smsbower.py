@@ -113,21 +113,21 @@ def _digits(value: object) -> str:
 
 
 def normalize_phone_e164(value: object, default_cc: str = "55") -> str:
-    digits = _digits(value)
-    if not digits:
-        return ""
-    if not digits.startswith(str(default_cc)) and len(digits) <= 11:
-        # leave as-is; caller may already include country code
-        pass
-    return "+" + digits if not str(value).strip().startswith("+") else str(value).strip()
-
-def normalize_brazil_phone(value: object) -> str:
-    digits = _digits(value)
+    """Normalize SMSBower phone to E.164 using expected country calling code digits."""
+    raw = str(value or "").strip()
+    digits = _digits(raw)
     if not digits:
         raise SMSBowerApiError("SMSBower returned an empty phone number")
-    if digits.startswith("55"):
+    cc = _digits(default_cc) or "55"
+    if digits.startswith(cc):
         return f"+{digits}"
-    return f"+55{digits}"
+    # Some providers return national format without country code
+    return f"+{cc}{digits}"
+
+
+def normalize_brazil_phone(value: object) -> str:
+    """Backward-compatible Brazil helper."""
+    return normalize_phone_e164(value, default_cc="55")
 
 
 def _parse_float(value: object, default: float = 0.0) -> float:
@@ -386,6 +386,8 @@ class SMSBowerOtpProvider:
         self.store = store or SMSBowerActivationStore()
         self.service = service
         self.country = country
+        self.country_iso = "BR"
+        self.phone_cc = "55"
         self.wait_seconds = max(1.0, float(wait_seconds)) if wait_seconds >= 1 else float(wait_seconds)
         self.poll_interval_seconds = max(0.01, float(poll_interval_seconds))
         self.max_channel_failures = max(1, int(max_channel_failures))
@@ -395,16 +397,31 @@ class SMSBowerOtpProvider:
     def reserve_number(self) -> SMSBowerActivation:
         reusable = self.store.reusable_activation()
         if reusable is not None:
-            logger.info("Reusing active SMSBower phone from provider {}", reusable.provider_id)
-            self._set_status(reusable.activation_id, 3)
-            return reusable
+            # Do not reuse a number that clearly belongs to another calling code
+            phone_cc = str(getattr(self, "phone_cc", "") or "")
+            digits = "".join(ch for ch in str(reusable.phone_number or "") if ch.isdigit())
+            if phone_cc and digits and not digits.startswith(phone_cc):
+                logger.info(
+                    "Skip reusable SMSBower number (cc mismatch want=+{} got={})",
+                    phone_cc,
+                    reusable.phone_number,
+                )
+            else:
+                logger.info("Reusing active SMSBower phone from provider {}", reusable.provider_id)
+                self._set_status(reusable.activation_id, 3)
+                return reusable
         return self._purchase_new_number()
 
     def _purchase_new_number(self) -> SMSBowerActivation:
+        """Buy the cheapest available number for the configured country (price asc)."""
         prices = self._get_provider_prices()
+        iso = str(getattr(self, "country_iso", "") or self.country or "?")
         if not prices:
-            raise SMSBowerApiError("SMSBower has no PayPal Brazil providers with available numbers")
+            raise SMSBowerApiError(
+                f"SMSBower has no available numbers for country={iso} (id={self.country}) service={self.service}"
+            )
         last_error: Exception | None = None
+        phone_cc = str(getattr(self, "phone_cc", "") or "55")
         for price in prices:
             if self.store.provider_failure_count(price.provider_id) >= self.max_channel_failures:
                 logger.info("Skipping SMSBower provider {} after repeated failures", price.provider_id)
@@ -413,16 +430,18 @@ class SMSBowerOtpProvider:
                 data = self._get_number_v2(price)
                 activation = SMSBowerActivation(
                     activation_id=str(data["activationId"]),
-                    phone_number=normalize_brazil_phone(data["phoneNumber"]),
+                    phone_number=normalize_phone_e164(data["phoneNumber"], default_cc=phone_cc),
                     provider_id=str(data.get("activationOperator") or data.get("provider_id") or price.provider_id),
                     price=_parse_float(data.get("activationCost"), price.price),
                     expires_at=time.time() + self.activation_ttl_seconds,
                     reused=False,
                 )
                 logger.info(
-                    "Reserved SMSBower PayPal Brazil number provider={} price={}",
+                    "Reserved SMSBower number country={} provider={} price={} phone={}",
+                    iso,
                     activation.provider_id,
                     activation.price,
+                    "*" * max(0, len(activation.phone_number) - 4) + activation.phone_number[-4:],
                 )
                 return activation
             except Exception as exc:
@@ -430,8 +449,10 @@ class SMSBowerOtpProvider:
                 self.store.record_failure(price.provider_id)
                 logger.warning("SMSBower provider {} failed: {}", price.provider_id, exc)
         if last_error is not None:
-            raise SMSBowerApiError(f"SMSBower could not reserve a PayPal Brazil number: {last_error}") from last_error
-        raise SMSBowerApiError("SMSBower providers are all blocked by failure thresholds")
+            raise SMSBowerApiError(
+                f"SMSBower could not reserve a number for country={iso}: {last_error}"
+            ) from last_error
+        raise SMSBowerApiError(f"SMSBower providers are all blocked by failure thresholds (country={iso})")
 
     def mark_sms_sent(self, activation: SMSBowerActivation) -> None:
         if activation.reused:

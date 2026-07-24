@@ -280,8 +280,10 @@ html[data-theme="light"] .theme-icon-moon { display: grid; }
 /* Layout */
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
+  width: 100%;
+  max-width: 100%;
 }
 
 .card {
@@ -294,6 +296,10 @@ html[data-theme="light"] .theme-icon-moon { display: grid; }
   -webkit-backdrop-filter: blur(18px);
   padding: 20px;
   transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+  /* prevent long stage/proxy text from blowing out the 2-col grid */
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .card:hover {
@@ -320,6 +326,11 @@ html[data-theme="light"] .theme-icon-moon { display: grid; }
   align-items: flex-start;
   gap: 16px;
   margin-bottom: 16px;
+
+  min-width: 0;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .sec-kicker {
@@ -343,6 +354,16 @@ html[data-theme="light"] .theme-icon-moon { display: grid; }
   color: var(--muted);
   font-size: 12px;
   font-family: var(--font-mono);
+}
+
+#currentMeta.sec-hint,
+.sec-hint {
+  display: block;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.4;
 }
 
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -529,9 +550,15 @@ button:focus-visible {
   color: var(--muted);
   font-size: 12px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   font-family: var(--font-mono);
+  line-height: 1.35;
 }
 
 .empty,
@@ -551,11 +578,24 @@ button:focus-visible {
 .progress-line {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px 12px;
   padding: 14px 16px;
   background: var(--input-bg);
   border: 1px solid var(--line);
   border-radius: 14px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.progress-line > .progress-main,
+.progress-line > div:first-child {
+  flex: 1 1 12rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .job-status {
@@ -569,8 +609,16 @@ button:focus-visible {
 
 .job-stage {
   margin-top: 4px;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
+  line-height: 1.4;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+  word-break: break-all;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
 }
 
 .duration {
@@ -578,17 +626,44 @@ button:focus-visible {
   font-variant-numeric: tabular-nums;
   font-family: var(--font-mono);
   font-size: 13px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding-top: 2px;
+  margin-left: auto;
 }
 
 .otp-panel {
-  display: grid;
-  grid-template-columns: 1.2fr 1fr;
-  gap: 14px;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
   border: 1px solid var(--otp-border);
   background: var(--otp-bg);
   border-radius: 14px;
   padding: 14px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.otp-copy {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.otp-prompt,
+#otpPrompt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+  max-height: 7.2em;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .otp-panel h3,
@@ -603,20 +678,43 @@ button:focus-visible {
 .otp-panel p {
   margin: 0;
   color: var(--muted);
-  line-height: 1.5;
-  font-size: 13px;
+  line-height: 1.45;
+  font-size: 12px;
 }
 
 .otp-form {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.otp-form input {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.otp-form button {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .details-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.details-grid > div {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .json-box,
@@ -633,7 +731,10 @@ button:focus-visible {
   color: var(--text);
 }
 
-.json-box { height: 260px; }
+.json-box {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+ height: 260px; }
 
 .logs-head {
   display: flex;
@@ -713,8 +814,7 @@ button:focus-visible {
   .hero-side { align-items: stretch; }
   .grid,
   .form-row,
-  .details-grid,
-  .otp-panel { grid-template-columns: 1fr; }
+  .details-grid { grid-template-columns: minmax(0, 1fr); }
   .span-2 { grid-column: span 1; }
   .otp-form { grid-template-columns: 1fr; }
   .theme-toggle { justify-content: center; }
@@ -950,4 +1050,82 @@ select#countrySelect {
   margin: 0 0 10px;
   font-size: 12px;
   opacity: 0.85;
+}
+
+
+/* module helper text under fields */
+.field-hint {
+  margin: 0.2rem 0 0.55rem;
+  padding: 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--muted, #8b93a7);
+  font-weight: 400;
+  opacity: 0.92;
+}
+.field-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.field-block > label {
+  margin: 0;
+}
+.field-block .field-hint {
+  margin-top: 0.15rem;
+  margin-bottom: 0;
+}
+
+
+.section-title > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+
+/* long-text containment v2 removed/replaced below */
+
+
+/* content area containment */
+.current-body {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.current-body .progress-line,
+.current-body .otp-panel,
+.current-body .details-grid,
+.current-body .logs-head,
+.current-body .logs-box {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.json-box,
+.logs-box {
+  max-width: 100%;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: 240px;
+}
+
+@media (max-width: 1100px) {
+  .details-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .otp-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .otp-form button {
+    width: 100%;
+  }
 }

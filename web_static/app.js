@@ -76,7 +76,11 @@ function getSelectedCountry() {
 
 function countryDisplayLabel(meta) {
   const code = String((meta && (meta.code || meta.country)) || "").toUpperCase();
-  return resolveCountryNameZh(code, meta && meta.name_zh);
+  const zh = resolveCountryNameZh(code, meta && meta.name_zh);
+  if (!code) return zh;
+  // 下拉/展示：中文名 + 协议简称，如 日本 (JP)
+  if (zh && zh !== code) return `${zh} (${code})`;
+  return code;
 }
 
 function resolveCountryNameZh(code, fallback) {
@@ -102,6 +106,7 @@ function setCountry(code) {
     phone.title = meta.phone_cc ? `区号 ${meta.phone_cc}，填写完整手机号` : "填写完整手机号";
   }
   localStorage.setItem(COUNTRY_KEY, next);
+  try { if (typeof syncSmsbowerUi === "function") syncSmsbowerUi(); } catch (e) {}
   return next;
 }
 
@@ -128,7 +133,7 @@ function renderCountryList(items, activeCode) {
   list.innerHTML = items
     .map((r) => {
       const active = r.code === activeCode ? " active" : "";
-      return `<li class="${active}" role="option" data-code="${esc(r.code)}" aria-selected="${r.code === activeCode}">${esc(resolveCountryNameZh(r.code, r.name_zh))}</li>`;
+      return `<li class="${active}" role="option" data-code="${esc(r.code)}" aria-selected="${r.code === activeCode}">${esc(countryDisplayLabel(r))}</li>`;
     })
     .join("");
 }
@@ -295,6 +300,43 @@ function loadCountryPref() {
   const code = getSelectedCountry();
   if (COUNTRY_META[code] || COUNTRY_OPTIONS.length) setCountry(code);
 }
+
+function isSmsbowerEnabled() {
+  return !!(document.querySelector("#smsbowerEnabled") && document.querySelector("#smsbowerEnabled").checked);
+}
+
+function syncSmsbowerUi() {
+  const on = isSmsbowerEnabled();
+  const phone = document.querySelector("#phone");
+  const phoneLabel = phone ? phone.closest("label") : null;
+  if (phone) {
+    phone.required = !on;
+    phone.readOnly = !!on;
+    if (on) {
+      phone.placeholder = "开启 SMSBower 后自动取该国最低价号码";
+      phone.title = "已开启自动接码：任务运行时按协议国家自动取最低价号码并填入";
+      if (!phone.dataset.manualBackup) phone.dataset.manualBackup = phone.value || "";
+      // 不强制清空用户已填号；提交时仍由后端用 SMSBower 号覆盖
+    } else {
+      phone.placeholder = (COUNTRY_META[getSelectedCountry()] || {}).placeholder || "+66...";
+      phone.title = "填写完整手机号";
+      phone.readOnly = false;
+    }
+  }
+  const hint = document.querySelector("#smsbowerHint");
+  if (hint) {
+    hint.textContent = on
+      ? "已开启：按当前协议国家自动取最低价号码并收验证码"
+      : "关闭时请手填手机号与验证码";
+  }
+  const phoneHint = document.querySelector("#phoneHint");
+  if (phoneHint) {
+    phoneHint.textContent = on
+      ? "已开启自动接码：号码将由系统填入，可留空"
+      : "未开 SMSBower 时请手填该国完整手机号";
+  }
+}
+
 
 function normalizeProxyInput(raw) {
   let value = String(raw || "").trim();
@@ -732,12 +774,42 @@ function renderCurrent(job) {
   $("#currentEmpty").classList.add("hidden");
   $("#currentBody").classList.remove("hidden");
   const buyerLabel = (job.buyer_identity_mode === "elevate_bind") ? "升Guest绑EC" : "原版";
-  const runtimeMeta = ` · FP:${job.fingerprint_source || "-"} · DD:${job.datadome_mode || "-"} · MTR:${job.mtr_runtime || "-"} · Buyer:${buyerLabel}`;
+  const sb = job.smsbower || {};
+  const sbLabel = job.smsbower_enabled
+    ? (sb.status ? `SMS:${sb.status}` : "SMS:on")
+    : "SMS:off";
+  const runtimeMeta = ` · FP:${job.fingerprint_source || "-"} · DD:${job.datadome_mode || "-"} · MTR:${job.mtr_runtime || "-"} · Buyer:${buyerLabel} · ${sbLabel}`;
   $("#currentMeta").textContent = `#${job.id} · 创建于 ${fmtTime(job.created_at)} · ${job.proxy_label || "代理关闭"}${runtimeMeta}`;
   $("#jobStatus").textContent = job.status;
-  $("#jobStage").textContent = job.stage || "";
+  const stageText = job.stage || "";
+  const stageEl = $("#jobStage");
+  if (stageEl) {
+    stageEl.textContent = stageText;
+    stageEl.title = stageText;
+  }
   $("#jobDuration").textContent = fmtDuration(job.duration);
   $("#generatedBox").textContent = pretty(job.generated);
+  // 自动接码：把后端取到的号码回填到手机号框（展示用）
+  try {
+    const autoPhone = job.smsbower && (job.smsbower.phone_e164 || job.smsbower.phone);
+    const genPhone = job.generated && job.generated.user && job.generated.user.phone_e164;
+    const fill = autoPhone || genPhone;
+    if (fill && isSmsbowerEnabled() && $("#phone")) {
+      $("#phone").value = fill;
+    }
+  } catch (e) {}
+  // 自动验证码：展示状态；若后端给出 otp_display 则填入输入框（只读提示）
+  try {
+    if (job.smsbower && job.smsbower.status) {
+      const st = String(job.smsbower.status || "");
+      if (job.awaiting_otp === false && st) {
+        /* status also in stage */
+      }
+      if (job.smsbower.otp_code && $("#otpValue") && !$("#otpValue").value) {
+        $("#otpValue").value = String(job.smsbower.otp_code);
+      }
+    }
+  } catch (e) {}
   $("#resultBox").textContent = pretty(job.result || (job.error ? { error: job.error, traceback: job.traceback } : {}));
   $("#copyResult").disabled = !(job.result || job.error);
 
@@ -819,7 +891,7 @@ async function startJob(evt) {
       method: "POST",
       body: JSON.stringify({
         ba_token: $("#baToken").value,
-        phone: $("#phone").value,
+        phone: isSmsbowerEnabled() ? ($("#phone").value || "") : $("#phone").value,
         max_card_attempts: Number($("#maxCardAttempts").value || 5),
         debug: $("#debug").checked,
         proxy_enabled: $("#proxyEnabled").checked,
@@ -917,7 +989,13 @@ function bind() {
 
 initTheme();
 loadProxyPrefs();
-  loadRuntimePrefs();
+loadRuntimePrefs();
+syncSmsbowerUi();
+document.querySelector("#smsbowerEnabled")?.addEventListener("change", () => {
+  syncSmsbowerUi();
+  saveRuntimePrefs();
+});
+
 ["#fingerprintSource","#datadomeMode","#mtrRuntime"].forEach((id) => {
   const el = document.querySelector(id);
   if (el) el.addEventListener("change", () => {
@@ -935,6 +1013,7 @@ try {
   const rt = localStorage.getItem(RUNTIME_KEY);
   const sb = localStorage.getItem(SMSBOWER_ON_KEY);
   if (sb != null && document.querySelector('#smsbowerEnabled')) document.querySelector('#smsbowerEnabled').checked = sb === '1';
+  syncSmsbowerUi();
 } catch (e) {}
 bind();
 loadRegions().catch(() => loadCountryPref());

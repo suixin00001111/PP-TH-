@@ -388,34 +388,77 @@ def build_otp_provider(*, enabled: bool | None, api_key: str | None, country_iso
     sid = resolve_smsbower_country_id(iso)
     try:
         provider.country = str(sid)
-        logger.info("SMSBower country mapping {} -> id {}", iso, sid)
+        provider.country_iso = iso
+        # calling-code digits for E.164 (prefer region table)
+        try:
+            from paypal.regions import get_region
+            provider.phone_cc = str(get_region(iso).phone_cc_digits)
+        except Exception:
+            provider.phone_cc = getattr(provider, "phone_cc", "55")
+        logger.info(
+            "SMSBower country mapping {} -> id {} phone_cc=+{}",
+            iso,
+            sid,
+            provider.phone_cc,
+        )
     except Exception:
         pass
     return provider
 
 
 def reserve_smsbower_number(flow) -> dict[str, Any]:
-    """Reserve SMSBower number, update flow.user phone, return public info."""
-    provider = getattr(flow, "_otp_provider", None)
+    """Reserve cheapest SMSBower number for protocol country; update flow.user phone."""
+    provider = getattr(flow, "sms_provider", None) or getattr(flow, "_otp_provider", None)
     if provider is None:
         return {"ok": False, "error": "SMSBower not enabled"}
-    iso = flow._ensure_protocol().code
-    provider.country = resolve_smsbower_country_id(iso)
-    activation = provider.reserve_number()
-    # normalize to e164 for protocol country
-    phone_raw = getattr(activation, "phone_number", "") or ""
-    digits = "".join(ch for ch in str(phone_raw) if ch.isdigit())
-    e164 = phone_raw if str(phone_raw).startswith("+") else ("+" + digits)
+    # keep aliases in sync for older call sites
+    flow.sms_provider = provider
+    flow._otp_provider = provider
     try:
-        flow._update_user_phone(e164)
+        iso = flow._ensure_protocol().code
+    except Exception:
+        iso = str(getattr(getattr(flow, "protocol", None), "code", None) or getattr(flow, "address", None) and flow.address.country or "BR").upper()
+    sid = resolve_smsbower_country_id(iso)
+    provider.country = str(sid)
+    provider.country_iso = iso
+    try:
+        from paypal.regions import get_region
+        provider.phone_cc = str(get_region(iso).phone_cc_digits)
+    except Exception:
+        pass
+    activation = provider.reserve_number()
+    phone_raw = getattr(activation, "phone_number", "") or ""
+    try:
+        flow._update_user_phone(phone_raw)
+        e164 = flow.user.phone
     except Exception as exc:
+        digits = "".join(ch for ch in str(phone_raw) if ch.isdigit())
+        e164 = phone_raw if str(phone_raw).startswith("+") else ("+" + digits)
         logger.warning("SMSBower phone normalize failed ({}): {} raw={}", iso, exc, phone_raw)
+        try:
+            flow.user.phone = e164
+        except Exception:
+            pass
     flow._smsbower_activation = activation
     try:
         from paypal.smsbower import activation_to_public_dict
         pub = activation_to_public_dict(activation)
     except Exception:
-        pub = {"activation_id": getattr(activation, "activation_id", ""), "phone_number": e164[-4:].rjust(8, "*")}
-    logger.info("SMSBower reserved number for {} -> {}", iso, pub.get("phone_number"))
-    return {"ok": True, "activation": pub, "phone": flow.user.phone}
+        pub = {
+            "activation_id": getattr(activation, "activation_id", ""),
+            "phone_number": e164[-4:].rjust(8, "*") if e164 else "",
+            "price": getattr(activation, "price", 0),
+            "provider_id": getattr(activation, "provider_id", ""),
+        }
+    pub["phone_e164"] = e164
+    pub["country_iso"] = iso
+    pub["country_id"] = str(sid)
+    logger.info(
+        "SMSBower reserved number for {} id={} price={} -> {}",
+        iso,
+        sid,
+        getattr(activation, "price", ""),
+        pub.get("phone_number"),
+    )
+    return {"ok": True, "activation": pub, "phone": e164, "smsbower": pub}
 

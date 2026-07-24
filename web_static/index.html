@@ -75,10 +75,13 @@
               <ul id="countryList" class="country-list" role="listbox" hidden></ul>
             </div>
           </label>
+          <div class="field-block">
           <label>
             <span>手机号</span>
-            <input id="phone" name="phone" required placeholder="+66812345678" inputmode="tel" autocomplete="tel" />
+            <input id="phone" name="phone" placeholder="+66812345678" inputmode="tel" autocomplete="tel" />
           </label>
+          <p id="phoneHint" class="field-hint">未开 SMSBower 时请手填该国完整手机号</p>
+          </div>
           <label>
             <span>浏览器指纹来源</span>
             <select id="fingerprintSource" name="fingerprintSource">
@@ -183,15 +186,21 @@
               <span>启用代理</span>
             </label>
           </div>
-          <div class="form-row">
-<label class="check-row">
-              <input id="smsbowerEnabled" name="smsbowerEnabled" type="checkbox" />
-              <span>SMSBower 自动接码</span>
-            </label>
-            <label>
-              <span>SMSBower API Key（可选）</span>
-              <input id="smsbowerApiKey" name="smsbowerApiKey" type="password" autocomplete="off" placeholder="留空则用手填 OTP" />
-            </label>
+                    <div class="form-row smsbower-row">
+            <div class="field-block">
+              <label class="check-row">
+                <input id="smsbowerEnabled" name="smsbowerEnabled" type="checkbox" />
+                <span>SMSBower 自动接码</span>
+              </label>
+              <p id="smsbowerHint" class="field-hint">关闭时请手填手机号与验证码</p>
+            </div>
+            <div class="field-block">
+              <label>
+                <span>SMSBower API Key（可选）</span>
+                <input id="smsbowerApiKey" name="smsbowerApiKey" type="password" autocomplete="off" placeholder="留空则用手填 OTP" />
+              </label>
+              <p class="field-hint">开启自动接码时填写；关闭时可忽略</p>
+            </div>
           </div>
           <div id="proxyPanel" class="proxy-panel">
 <label id="proxyRawWrap">
@@ -246,17 +255,17 @@
 
         <div id="currentBody" class="current-body hidden">
           <div class="progress-line">
-            <div>
+            <div class="progress-main">
               <div id="jobStatus" class="job-status">queued</div>
-              <div id="jobStage" class="job-stage">排队中</div>
+              <div id="jobStage" class="job-stage" title="">排队中</div>
             </div>
             <div id="jobDuration" class="duration">0s</div>
           </div>
 
           <div id="otpPanel" class="otp-panel hidden">
-            <div>
+            <div class="otp-copy">
               <h3>需要输入验证码 / 新手机号</h3>
-              <p id="otpPrompt"></p>
+              <p id="otpPrompt" class="otp-prompt"></p>
             </div>
             <form id="otpForm" class="otp-form" autocomplete="off">
               <input id="otpValue" name="paypal_otp_or_new_phone" type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" placeholder="6位验证码，或【新的】手机号；q 退出" />

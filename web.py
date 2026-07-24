@@ -389,7 +389,7 @@ def mask_phone(value: str) -> str:
 
 
 def phone_input_hint(country: str, current_phone: str = "") -> str:
-    """OTP/phone prompt without full phone digits (avoids redact_text masking examples)."""
+    """Short OTP/phone prompt helper (keep UI lines short)."""
     try:
         region = get_region(country)
         cc = str(getattr(region, "phone_cc", "") or "").strip()
@@ -399,12 +399,8 @@ def phone_input_hint(country: str, current_phone: str = "") -> str:
         cc = f"+{cc}"
     current = mask_phone(current_phone) if current_phone else ""
     if current:
-        return (
-            f"当前号码 {current}。"
-            f"请填【另一号码】：国家码 {cc or '+??'} + 本地号"
-            f"（不要默认再填同一号码，除非确认该号可用）"
-        )
-    return f"格式：国家码 {cc or '+??'} + 本地号"
+        return f"当前 {current}，请填新号（{cc or '+??'}…）"
+    return f"格式 {cc or '+??'} + 本地号"
 
 
 def redact_text(value: Any) -> str:
@@ -508,6 +504,7 @@ def public_generated_payload(user: UserInfo, card: CardInfo, address: BillingAdd
             "last_name": user.last_name,
             "email": mask_email(user.email),
             "phone": mask_phone(user.phone),
+            "phone_e164": user.phone,
             "phone_country_code": user.phone_country_code,
             "phone_local": mask_phone(user.phone_local),
             "password": "<redacted>",
@@ -704,6 +701,8 @@ class WebJob:
     continue_merchant: bool = False
     smsbower_enabled: bool = False
     _smsbower_api_key: str = ""
+    smsbower_info: dict | None = None
+    phone_auto: bool = False
     debug: bool = False
     max_card_attempts: int = 5
     max_flow_attempts: int = 1
@@ -872,6 +871,8 @@ class WebJob:
             "buyer_identity_mode": getattr(self, "buyer_identity_mode", "legacy"),
             "continue_merchant": bool(getattr(self, "continue_merchant", False)),
                 "smsbower_enabled": self.smsbower_enabled,
+                "smsbower": sanitize_payload(self.smsbower_info) if self.smsbower_info else None,
+                "phone_auto": bool(getattr(self, "phone_auto", False)),
                 "debug": self.debug and ALLOW_DEBUG_LOGS,
                 "max_card_attempts": self.max_card_attempts,
                 "proxy_enabled": self.proxy_enabled,
@@ -999,8 +1000,143 @@ class WebPayPalFlow(PayPalFlow):
         logger.info(prompt)
         return self.job.wait_for_input(prompt)
 
+    def _publish_smsbower(self, payload: dict[str, Any] | None) -> None:
+        """Expose SMSBower state to the web job for UI phone/OTP modules."""
+        info = dict(payload or {})
+        self.job.smsbower_info = info
+        self.job.updated_at = now_ts()
+        try:
+            # refresh generated block so phone module shows the auto number
+            self.job.set_generated(public_generated_payload(self.user, self.card, self.address))
+        except Exception:
+            pass
+        # also stash full phone for UI fill (masked still in generated.user.phone)
+        if self.job.smsbower_info is not None and getattr(self.user, "phone", None):
+            self.job.smsbower_info.setdefault("phone_e164", self.user.phone)
+            self.job.smsbower_info.setdefault(
+                "phone",
+                mask_phone(self.user.phone),
+            )
+
+    def _confirm_phone_with_sms_provider_web(self, token: str, signup_url: str) -> None:
+        """Cheapest-number reserve + auto OTP for the selected protocol country."""
+        if self.sms_provider is None:
+            raise RuntimeError("SMSBower not configured")
+        self._otp_provider = self.sms_provider
+        max_attempts = int(getattr(self.sms_provider, "max_attempts", 12) or 12)
+        for attempt in range(1, max_attempts + 1):
+            self._set_stage(f"SMSBower 取号 {attempt}/{max_attempts}")
+            reserved = None
+            try:
+                from paypal.runtime_bridge import reserve_smsbower_number
+
+                reserved = reserve_smsbower_number(self)
+            except Exception as exc:
+                logger.warning("SMSBower reserve helper failed, direct reserve: {}", exc)
+            activation = getattr(self, "_smsbower_activation", None)
+            if activation is None and hasattr(self.sms_provider, "reserve_number"):
+                activation = self.sms_provider.reserve_number()
+                self._smsbower_activation = activation
+                try:
+                    self._update_user_phone(activation.phone_number)
+                except Exception as phone_exc:
+                    logger.warning("SMSBower phone update failed: {}", phone_exc)
+            if activation is None:
+                raise RuntimeError("SMSBower did not return an activation")
+
+            pub = {
+                "status": "reserved",
+                "attempt": attempt,
+                "price": getattr(activation, "price", None),
+                "provider_id": getattr(activation, "provider_id", ""),
+                "activation_id": getattr(activation, "activation_id", ""),
+                "phone_e164": getattr(self.user, "phone", ""),
+                "phone": mask_phone(getattr(self.user, "phone", "")),
+            }
+            if isinstance(reserved, dict) and reserved.get("smsbower"):
+                pub.update(reserved.get("smsbower") or {})
+                pub["status"] = "reserved"
+            self._publish_smsbower(pub)
+            logger.info(
+                "SMSBower auto phone ready attempt={} price={} phone={}",
+                attempt,
+                pub.get("price"),
+                pub.get("phone"),
+            )
+
+            self._set_stage("SMSBower 发码")
+            try:
+                auth_id, challenge_id = self._initiate_2fa_phone_confirmation(token, signup_url)
+            except Exception as exc:
+                logger.error("Failed to initiate OTP for SMSBower phone {}: {}", self._masked_phone(), exc)
+                try:
+                    self.sms_provider.abandon(activation, "paypal_initiation_failed")
+                except Exception:
+                    pass
+                self._publish_smsbower({**pub, "status": "initiate_failed", "error": str(exc)})
+                continue
+
+            try:
+                self.sms_provider.mark_sms_sent(activation)
+            except Exception:
+                pass
+            self._publish_smsbower({**pub, "status": "waiting_sms"})
+            self._set_stage("SMSBower 等验证码")
+            timeout = float(getattr(self.sms_provider, "wait_seconds", 30) or 30)
+            logger.info(
+                "Waiting for SMSBower OTP attempt={} provider={} timeout={}s",
+                attempt,
+                getattr(activation, "provider_id", ""),
+                timeout,
+            )
+            code = self.sms_provider.wait_for_code(activation, timeout_seconds=timeout)
+            if not code:
+                try:
+                    self.sms_provider.abandon(activation, "sms_timeout")
+                except Exception:
+                    pass
+                self._publish_smsbower({**pub, "status": "sms_timeout"})
+                continue
+            code_digits = "".join(ch for ch in str(code) if ch.isdigit())
+            self._publish_smsbower({**pub, "status": "code_received", "otp_code": code_digits})
+            self._set_stage("SMSBower 提交验证码")
+            if self._confirm_2fa_phone_confirmation(token, signup_url, auth_id, challenge_id, code_digits):
+                try:
+                    self.sms_provider.register_confirmation_result(activation, True)
+                except Exception:
+                    pass
+                self._publish_smsbower({**pub, "status": "confirmed", "otp_code": code_digits})
+                logger.success("SMSBower auto OTP confirmed")
+                return
+            try:
+                self.sms_provider.register_confirmation_result(activation, False)
+            except Exception:
+                pass
+            self._publish_smsbower({**pub, "status": "code_rejected"})
+            logger.warning("SMSBower OTP rejected by PayPal; trying another cheapest number")
+        raise RuntimeError("SMSBower 自动接码失败：已用尽重试次数")
+
     def _confirm_phone_with_retry(self, token: str, signup_url: str):
-        """Web version of the CLI input loop."""
+        """Prefer SMSBower cheapest auto path; fall back to manual web OTP input."""
+        provider = getattr(self, "sms_provider", None) or getattr(self, "_otp_provider", None)
+        if provider is not None:
+            self.sms_provider = provider
+            self._otp_provider = provider
+            try:
+                return self._confirm_phone_with_sms_provider_web(token, signup_url)
+            except Exception as auto_exc:
+                logger.warning("SMSBower 自动接码失败，回落手填：{}", auto_exc)
+                self._publish_smsbower(
+                    {
+                        "status": "fallback_manual",
+                        "error": str(auto_exc),
+                        "phone_e164": getattr(self.user, "phone", ""),
+                        "phone": mask_phone(getattr(self.user, "phone", "")),
+                    }
+                )
+                self._set_stage("SMSBower 失败，请手填")
+
+        # ---- manual path (unchanged behavior) ----
         while True:
             try:
                 auth_id, challenge_id = self._initiate_2fa_phone_confirmation(token, signup_url)
@@ -1008,7 +1144,7 @@ class WebPayPalFlow(PayPalFlow):
                 logger.error("Failed to initiate OTP for {}: {}", self._masked_phone(), e)
                 while True:
                     value = self._prompt_operator(
-                        f"发送验证码失败。请输入【新的】手机号重新发送（{phone_input_hint(self.job.country, getattr(self.user, "phone", ""))}）；输入 q 退出。"
+                        f"发码失败，请输入新手机号（{phone_input_hint(self.job.country, getattr(self.user, 'phone', ''))}）；q 退出"
                     )
                     if value.lower() in {"q", "quit", "exit"}:
                         raise RuntimeError("OTP confirmation cancelled by user") from e
@@ -1027,52 +1163,9 @@ class WebPayPalFlow(PayPalFlow):
 
             logger.info("SMS verification code sent to phone: {}", self._masked_phone())
 
-            # SMSBower auto OTP full path (optional) — fall back to manual input
-            provider = getattr(self, "sms_provider", None) or getattr(self, "_otp_provider", None)
-            if provider is not None:
-                try:
-                    from paypal.runtime_bridge import reserve_smsbower_number
-                    self.job.set_status("running", "SMSBower 自动接码中…")
-                    activation = getattr(self, "_smsbower_activation", None)
-                    # If user phone may not be SMSBower-owned, reserve number then re-initiate OTP once
-                    if activation is None and hasattr(provider, "reserve_number"):
-                        reserved = reserve_smsbower_number(self)
-                        if reserved.get("ok"):
-                            activation = getattr(self, "_smsbower_activation", None)
-                            logger.info("SMSBower number ready, re-initiating OTP to {}", self._masked_phone())
-                            try:
-                                if hasattr(provider, "mark_sms_sent") and activation is not None:
-                                    # will mark after re-init
-                                    pass
-                                auth_id, challenge_id = self._initiate_2fa_phone_confirmation(token, signup_url)
-                                if activation is not None and hasattr(provider, "mark_sms_sent"):
-                                    provider.mark_sms_sent(activation)
-                            except Exception as re_exc:
-                                logger.warning("Re-initiate OTP after SMSBower reserve failed: {}", re_exc)
-                    if activation is not None and hasattr(provider, "wait_for_code"):
-                        if hasattr(provider, "mark_sms_sent"):
-                            try:
-                                provider.mark_sms_sent(activation)
-                            except Exception:
-                                pass
-                        code = provider.wait_for_code(activation)
-                        if code:
-                            code = "".join(ch for ch in str(code) if ch.isdigit())
-                        if code and 4 <= len(code) <= 8:
-                            logger.info("SMSBower code received (len={}), confirming…", len(code))
-                            if self._confirm_2fa_phone_confirmation(
-                                token, signup_url, auth_id, challenge_id, code
-                            ):
-                                return
-                            logger.warning("SMSBower code rejected by PayPal; fall back to manual OTP")
-                        else:
-                            logger.warning("SMSBower did not return code in time; fall back to manual OTP")
-                except Exception as sms_exc:
-                    logger.warning("SMSBower auto OTP failed, fall back to manual: {}", sms_exc)
-
             while True:
                 value = self._prompt_operator(
-                    f"请输入6位短信验证码；如需换号，输入【新的】手机号（{phone_input_hint(self.job.country, getattr(self.user, "phone", ""))}）；输入 q 退出。"
+                    f"输入6位验证码，或新手机号换号（{phone_input_hint(self.job.country, getattr(self.user, 'phone', ''))}）；q 退出"
                 )
 
                 if value.lower() in {"q", "quit", "exit"}:
@@ -1096,6 +1189,7 @@ class WebPayPalFlow(PayPalFlow):
                     break
                 except ValueError as e:
                     logger.warning("输入既不是6位验证码，也不是有效手机号：{}。请重新输入。", e)
+
 
 
 # ----------------------------- logging -----------------------------
@@ -1168,10 +1262,26 @@ def create_job(
         raise ValueError("BA Token 不能为空")
     if not BA_TOKEN_RE.fullmatch(ba_token):
         raise ValueError("BA Token 格式不正确")
-    if not (phone or "").strip():
-        raise ValueError("手机号不能为空")
     country = normalize_region(country)
-    phone = normalize_region_phone(country, phone)
+    phone_auto = False
+    phone_raw = (phone or "").strip()
+    # SMSBower 开启时手机号可留空：任务内按协议国自动取最低价号
+    if not phone_raw:
+        if bool(smsbower_enabled):
+            phone_auto = True
+            try:
+                phone_raw = get_region(country).phone_placeholder
+            except Exception:
+                phone_raw = ""
+            if not phone_raw:
+                # last-resort valid-looking placeholder for user model construction
+                try:
+                    phone_raw = f"{get_region(country).phone_cc}100000000"
+                except Exception as exc:
+                    raise ValueError("开启 SMSBower 时无法生成占位手机号，请手填手机号或检查国家") from exc
+        else:
+            raise ValueError("手机号不能为空（未开启 SMSBower 自动接码时必填）")
+    phone = normalize_region_phone(country, phone_raw)
     profile = "real"  # Web UI is real-run only (no test/smoke profile)
     continue_merchant = False  # A-layer only (aligned with openai-paypal; no B/C switch)
 
@@ -1317,6 +1427,7 @@ def create_job(
         continue_merchant=continue_merchant,
         smsbower_enabled=smsbower_enabled,
         _smsbower_api_key=smsbower_api_key,
+        phone_auto=phone_auto,
         debug=debug,
         max_card_attempts=max_card_attempts,
         max_flow_attempts=max_flow_attempts,
@@ -1467,6 +1578,9 @@ def run_job(job: WebJob) -> None:
                 smsbower_api_key=getattr(job, "_smsbower_api_key", ""),
                 job=job,
             )
+            # unify SMSBower provider aliases for reserve helpers
+            if getattr(flow, "sms_provider", None) is not None:
+                flow._otp_provider = flow.sms_provider
             result = flow.run()
             if isinstance(result, dict):
                 result.setdefault("region", job.country)
