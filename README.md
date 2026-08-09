@@ -7,6 +7,9 @@
 
 仓库：https://github.com/suixin00001111/PP-TH-
 
+**给后续 AI / 协作者的交接说明（必读）：[AI_HANDOFF.md](./AI_HANDOFF.md)**  
+协议链路：[PROTOCOL_CHAIN.md](./PROTOCOL_CHAIN.md) · 代理运维：[PROXY.md](./PROXY.md)
+
 ---
 
 ## 核心概念（务必分清）
