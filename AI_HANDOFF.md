@@ -2,7 +2,8 @@
 
 > **Audience:** another coding agent continuing this repo.  
 > **Repo:** https://github.com/suixin00001111/PP-TH-  
-> **Last handoff commit theme:** Windows local runnable stack (TLS CA, proxy direct path, device cookie, start.bat).  
+> **Docs updated:** 2026-08-10  
+> **Recent themes:** (1) Windows runnable (TLS CA, proxy direct, device cookie); (2) Brazil-public protocol order (Phase1 before Phase2, dynamic ModXO ids).  
 > **Language:** English for machine clarity; product UI/logs often Chinese.
 
 Read this **before** changing flow, proxy, session, or web job ownership. Do not treat public SaaS sites as source-of-truth code; this tree is the implementation.
@@ -24,7 +25,7 @@ Read this **before** changing flow, proxy, session, or web job ownership. Do not
 | Success criteria (local) | Install deps → Web up → `/api/health` → create job → Phase 0 page load → Phase 2 actions against PayPal |
 | Full BA success needs | **Real unexpired BA token** + **target-country residential proxy** (or working TUN) + phone/OTP (manual or SMSBower) |
 
-Fake tokens (`BA-TEST…`, `BA-ABCDEF…`) are only for **smoke**. Expect PayPal `authchallenge` / “no EC token” — that is **not** “project broken”.
+Fake tokens (`BA-TEST…`, `BA-ABCDEF…`) are only for **smoke**. Expect PayPal `INVALID_TOKEN` / `generic-error` / `authchallenge` / “no EC token” — that is **not** “project broken”. A healthy smoke path logs Phase0 page 200 → Phase1 risk beacons → Phase2 server actions, then fails on token/risk.
 
 ---
 
@@ -261,15 +262,23 @@ Key test files:
 
 ## 10. Recent fixes (do not revert casually)
 
-Commit message family: **`fix: make local Web/BA stack runnable on Windows`** (`7f1e4c1` and follow-ups).
+### A. Windows runnable (`7f1e4c1` family)
 
 1. **`paypal/ssl_env.py`** — curl 77 / non-ASCII path.
-2. **`paypal/session.py`** — use mirrored CA; curl→httpx resilience.
+2. **`paypal/session.py`** — mirrored CA; curl→httpx resilience.
 3. **`paypal/proxy.py`** — `require_proxy=False` → direct; skip system probe when assist disabled.
-4. **`web.py`** — job runner require_proxy only when user asked; index.html device cookie; early `ensure_ssl_cert_env`.
-5. **`start.bat`** — create venv if missing; copy `.env.example`; preflight CA.
+4. **`web.py`** — require_proxy only when user asked; index.html device cookie; early `ensure_ssl_cert_env`.
+5. **`start.bat`** — venv bootstrap; `.env.example` copy; CA preflight.
 6. **`main.py`** — early `ensure_ssl_cert_env`.
-7. Tests for proxy + ssl + flow guard expectation updates.
+7. Tests: `test_resolve_outbound_proxy.py`, `test_ssl_env.py`, flow guard updates.
+
+### B. Brazil-public protocol alignment (`e7f7e1a` family)
+
+1. **`PayPalFlow.run`**: Phase0 → **Phase1 risk beacons** → Phase2 (was skipping Phase1).
+2. **`_phase1_risk_controls`**: fingerprint + Tealeaf + analytics on `/pay` before ModXO.
+3. **ModXO ids**: default `PAYPAL_MODXO_STATIC_ACTION_IDS=0` (dynamic-first); core pair = create-account + create-user (Brazil-style); emergency-static only if scan finds **nothing**.
+4. **Phone CC** on Continue_To_Payment: protocol `phone_cc`, not hard-coded `+55`.
+5. Docs: `PROTOCOL_CHAIN.md`, `.env.example`, this handoff.
 
 ---
 
@@ -314,13 +323,13 @@ Priority order usually:
 
 ```text
 Repo: https://github.com/suixin00001111/PP-TH-
-Read: AI_HANDOFF.md, PROTOCOL_CHAIN.md, PROXY.md
+Read: AI_HANDOFF.md, README.md, PROTOCOL_CHAIN.md, PROXY.md, SETUP.md
 Stack: local multi-country PayPal BA pure HTTP + web.py
-Defaults: protocol/random/python_generated; proxy optional; merchant B/C off on Web
-Windows fixes already in tree: ssl_env CA mirror, direct proxy path, device cookie on index
-Smoke: Web health + job with format-valid fake BA should reach Phase 0/2 then fail on PayPal risk/token
+Defaults: protocol/random/python_generated; Phase0→1→2→3→4; ModXO dynamic-first
+Windows: ssl_env CA mirror, direct proxy when unset, device cookie on index
+Smoke: health + fake BA → Phase0/1/2 then INVALID_TOKEN or authchallenge (OK)
 Do not require system Clash for no-proxy jobs. Do not commit .env.
-User goal: keep runnable locally; live success needs real BA + residential proxy + OTP.
+Live success: real BA + residential proxy + OTP. Brazil public is reference order only.
 ```
 
 ---

@@ -1,4 +1,8 @@
-# 泰国 PayPal 全协议链路（本地纯 HTTP）
+# PayPal 全协议链路（本地纯 HTTP · 多国）
+
+> 流程架子以泰国为参考；运行时按所选国家绑定 locale / 区号 / 资料。  
+> 阶段顺序已对齐巴西公开包 `paypal-pay-public-nocdk`（Phase1 在 Phase2 前）。  
+> 更新：2026-08。
 
 ## 0. pay.153 远端（对照，非本包依赖）
 
@@ -13,24 +17,37 @@ UI country=TH
   → completed + result.return_url
 ```
 
-## 1. 本包本地链路（对齐巴西全协议实现）
+## 1. 本包本地链路（对齐巴西公开包阶段顺序）
 
 ```text
 main.py / web.py
+  → ensure_ssl_cert_env()          # Windows 中文路径 CA
+  → resolve_outbound_proxy()       # 填代理优先；未填可直连
   → generate_user/card/address (country pools)
   → PayPalFlow.run()
       Phase0: GET /agreements/approve?ba_token=BA-...
               follow redirects, extract ssrt / cookies / DataDome 判定
-              ModXO Next-Action ids: live HTML/JS scan first (static opt-in)
+              ModXO Next-Action ids: live HTML/JS scan first
+              (PAYPAL_MODXO_STATIC_ACTION_IDS=0 默认；扫空才 emergency-static)
       Phase1: FraudNet fingerprint + Tealeaf + analytics on /pay
-              (Brazil public order; must run before ModXO create-account)
-      Phase2: ModXO Server Action create-account → EC token / signup URL
+              ★ 必须在 Phase2 之前（巴西公开包同序；曾漏跑）
+      Phase2: ModXO Server Action Pay_With_Card / Continue_To_Payment
+              → onboardingRedirectUrl / EC token / signup URL
       Phase3: GriffinMetadata(country/lang)
               InitiateRiskBasedTwoFactorPhoneConfirmation
               ConfirmRiskBasedTwoFactorPhoneConfirmation (OTP)
               SignUpNewMemberMutation
       Phase4: AuthorizeBillingAgreement → return_url / BA id
 ```
+
+### 冒烟判定（假 BA）
+
+| 日志 | 含义 |
+|------|------|
+| `Page loaded: 200` | Phase0 出站与 TLS 正常 |
+| `Phase 1: Risk control signals` / `Risk control signals sent` | Phase1 已跑 |
+| `Phase 2: Create account flow` | 进入 ModXO |
+| `INVALID_TOKEN` / `generic-error` / `no valid EC token` / `authchallenge` | 假 token 或风控，**链路已通** |
 
 ## 2. 关键 GraphQL / HTTP
 
