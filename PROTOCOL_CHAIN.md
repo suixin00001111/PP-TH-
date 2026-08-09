@@ -2,7 +2,8 @@
 
 > 流程架子以泰国为参考；运行时按所选国家绑定 locale / 区号 / 资料。  
 > 阶段顺序已对齐巴西公开包 `paypal-pay-public-nocdk`（Phase1 在 Phase2 前）。  
-> 更新：2026-08。
+> Web 风控三项固定纯协议：`random` / `protocol` / `python_generated`。  
+> 更新：2026-08-10。
 
 ## 0. pay.153 远端（对照，非本包依赖）
 

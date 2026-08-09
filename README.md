@@ -17,21 +17,29 @@
 
 ---
 
-## 当前默认（2026-08）
+## 当前默认（2026-08-10）
 
 | 项 | 默认 |
 |----|------|
 | 运行时 | **protocol**（纯 HTTP） |
-| 指纹 / DataDome / MTR | **固定** `random` / `protocol` / `python_generated`（巴西纯协议；Web 不再提供 Headless/Roxy 下拉） |
-| 阶段顺序 | **Phase0 → Phase1（风控信标）→ Phase2 → Phase3 → Phase4**（对齐巴西公开包顺序） |
+| 指纹 / DataDome / MTR | **Web 固定** `random` / `protocol` / `python_generated`（巴西纯协议；页面无 Headless/Roxy 下拉） |
+| 阶段顺序 | **Phase0 → Phase1（风控信标）→ Phase2 → Phase3 → Phase4**（对齐巴西公开包） |
 | ModXO action id | **优先从 HTML/JS 动态提取**；`PAYPAL_MODXO_STATIC_ACTION_IDS=0` |
-| 代理 | 未填写时 **允许直连**；不强制半坏 Clash「系统代理」 |
+| 代理 | **只有填了代理 URL 才硬要求探测成功**；未填可直连；半坏 Clash 7897 不再误报 forbidden IP |
 | Web A 层 | 仅 BA；Merchant B/C 默认关 |
-| Windows 中文路径 | `paypal/ssl_env.py` 镜像 CA，避免 curl_cffi **error 77** |
+| Windows 中文路径 | `paypal/ssl_env.py` 镜像 CA；**代理探测**也走同一 CA，避免 curl 77 |
 
 假 BA（如 `BA-ABCDEFGH12345678`）用于冒烟：应看到 Phase0 页面 200、Phase1 信标、Phase2 打到 PayPal，然后因 **INVALID_TOKEN / 无 EC / authchallenge** 失败——这是 **预期**，不是“项目起不来”。
 
 **完整成功（OTP / 授权）需要**：真实未过期 BA + 目标国住宅代理（或可用 TUN）+ 手机号 / OTP。
+
+### 最近修订（摘要）
+
+| 主题 | 说明 |
+|------|------|
+| 风控三项简化 | Web 锁定巴西纯协议三件套；`create_job` 忽略客户端 headless/roxy |
+| 代理失败可诊断 | curl 35/77 优先识别；保留 `resolve_outbound_proxy` 中文原文；半开 Clash 提示「关代理直连 / 开 TUN / 测住宅」 |
+| 冒烟路径 | 关代理 + 假 BA → Phase0/1/2 → `INVALID_TOKEN` 即引擎可跑 |
 
 ---
 
@@ -241,16 +249,23 @@ socks5h://user:pass@host:port
 用户目录含中文时 libcurl 读 certifi 失败。`ssl_env` 会把 CA 镜像到 `C:\ProgramData\PP-TH\cacert.pem`。`start.bat` / `web.py` / `main.py` 启动时会执行。
 
 **代理 403 / forbidden ip？**  
-多为代理商拒绝当前公网 IP；加白或开 TUN。见 [PROXY.md](./PROXY.md)。
+仅当代理商正文明确 `forbidden ip=… not supported` 时才是 IP 白名单问题。  
+若是 **curl 35 / SSL 握手失败**：多半是本机 Clash 半开（端口在听、HTTPS 不通）或住宅节点挂了——先关「启用代理」直连冒烟，或开 TUN，或点「测试代理」。见 [PROXY.md](./PROXY.md)。
+
+**开了代理却秒失败？**  
+只要代理框**填了 URL**，探测失败会硬停。可：① 关代理开关冒烟；② 先「测试代理」看到出口 IP；③ 开客户端 TUN 并清空代理框。
 
 **未填代理却很慢 / 失败？**  
-旧逻辑会探测坏系统代理。当前：`PAYPAL_USE_SYSTEM_PROXY=0`（默认）时未填代理直接直连。
+旧逻辑会探测坏系统代理。当前：`PAYPAL_USE_SYSTEM_PROXY=0`（默认）且未填 URL 时直接 **direct**。
 
 **假 BA 失败正常吗？**  
 正常。PayPal 会返回 `INVALID_TOKEN` 或 authchallenge；说明协议链路已通。
 
 **任务创建了但详情 404？**  
 浏览器需带 `paypal_web_device_id` cookie；API 调试请用 cookie jar。
+
+**Web 上还能选 Headless / Roxy 吗？**  
+不能。页面三项已固定纯协议（与巴西公开包一致）。CLI / 环境变量仍可覆盖高级模式（见 `SETUP.md`）。
 
 ---
 
@@ -266,11 +281,9 @@ socks5h://user:pass@host:port
 
 | 能力 | 说明 |
 |------|------|
-| **protocol** | 纯 HTTP（**默认**，推荐先跑通） |
-| **headless** | Playwright 无头辅助 Phase0/1 |
-| **auto** | 有 Roxy Key 优先 Roxy，否则 headless |
-| **Roxy** | RoxyBrowser Local API（本机 + API Key） |
-| **MTR** | `python_generated` / headless / roxy |
+| **protocol** | 纯 HTTP（**Web 固定默认**，推荐） |
+| **headless / Roxy / auto** | 仅 **CLI / env** 高级路径；Web UI 不提供选择 |
+| **MTR** | Web 固定 `python_generated`；CLI 可 headless/roxy |
 | **SMSBower** | 自动接码（默认关），与 Web 手填 OTP 并存 |
 
 ```powershell
@@ -345,15 +358,13 @@ $env:PAYPAL_ROXY_API_PORT = "50000"
 $env:PAYPAL_RUNTIME_MODE = "auto"
 ```
 
-### 运行时选择
+### 运行时选择（CLI / env）
 
 | 模式 | 行为 |
 |------|------|
-| `protocol` | 纯 HTTP（默认） |
-| `headless` | Playwright 无头辅助 Phase0/1 |
-| `auto` | 有 Roxy Key 优先 Roxy，否则 headless，失败回退 protocol |
-
-Web 表单「运行时」下拉；CLI：`--runtime protocol|headless|auto`
+| `protocol` | 纯 HTTP（**Web 固定**；CLI 默认） |
+| `headless` | Playwright 无头辅助 Phase0/1（CLI） |
+| `auto` | 有 Roxy Key 优先 Roxy，否则 headless，失败回退 protocol（CLI） |
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --country JP --ba-token BA-xxx --phone +81... --runtime headless
@@ -374,9 +385,9 @@ $env:SMSBOWER_API_KEY = "your_key"
 
 | 项 | 默认 |
 |----|------|
-| 指纹 / DataDome / MTR | **本地 Headless**（需 Playwright Chromium） |
+| 指纹 / DataDome / MTR | **random / protocol / python_generated**（巴西纯协议，页面只读） |
 | 业务层 | **仅 A 层实跑**（无 B/C 开关） |
-| 代理 | 填写优先；自动 socks5h；系统代理可回退 |
-| 文档 | [SETUP.md](./SETUP.md) · [PROXY.md](./PROXY.md) |
+| 代理 | 填了 URL 才硬探测；未填 direct；探测用 ASCII CA |
+| 文档 | [SETUP.md](./SETUP.md) · [PROXY.md](./PROXY.md) · [AI_HANDOFF.md](./AI_HANDOFF.md) |
 
-变更涉及：`web.py`、`paypal/proxy.py`、`paypal/proxy_bridge.py`、`paypal/session.py`、`paypal/local_headless.py`。
+变更涉及：`web.py`、`web_static/*`、`paypal/proxy.py`、`paypal/session.py`、`paypal/ssl_env.py`、`config.py`。

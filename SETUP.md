@@ -62,9 +62,13 @@ copy .env.example .env
 ### Web 当前默认
 
 - 运行时：**protocol**（纯 HTTP）
+- 风控三项（巴西纯协议，**页面固定、不可选**）：
+  - 浏览器指纹来源 = `random`
+  - DataDome 模式 = `protocol`
+  - MTR sealedResult = `python_generated`
 - 业务：**实跑 A 层 BA**（无 Merchant B/C 开关）
 - 国家：可搜索中文下拉
-- 代理：填写 +「测试代理」；未开代理允许直连
+- 代理：填写 +「测试代理」；**只有填了代理 URL 才硬失败**；未填可直连
 - 任务 cookie：`paypal_web_device_id`（首页加载即下发）
 
 ### 常用 API
@@ -111,24 +115,30 @@ HTTP client: curl_cffi (chrome) ca=C:\ProgramData\PP-TH\cacert.pem
 
 要点：
 
-- 未填代理 + `require_proxy=false` → **direct**，不硬失败
-- 填了代理则必须探测成功，否则中文报错提示
-- 系统代理仅在 `PAYPAL_USE_SYSTEM_PROXY=1` 或已填代理回退路径时积极使用
+- **未填代理 URL** → `require_proxy=false` → **direct**，不硬失败（即使本机 7897 半开）
+- **填了代理 URL** → 必须探测成功，否则中文报错（保留 resolve 原文；curl 35/77 单独说明）
+- 探测走 `ssl_env` ASCII CA（与业务会话一致）
+- 系统代理仅在 `PAYPAL_USE_SYSTEM_PROXY=1` 或已填代理的回退路径时积极使用
+- 半开 Clash（端口在听、HTTPS TLS 失败）≠ forbidden IP；应关代理直连或开 TUN
 
-## 8. Roxy（可选）
+## 8. Roxy / Headless（可选，CLI）
 
-1. 本机启动 RoxyBrowser Local API  
-2. Web Roxy 面板填 API Key，或设 `PAYPAL_ROXY_API_KEY`  
-3. 指纹/DataDome/MTR 选 roxy 或 auto  
-4. 未填代理时任务可显示「本机网络」
+Web **不再**提供指纹 / DataDome / MTR 的 Roxy 下拉。若要用浏览器加深：
+
+```powershell
+$env:PAYPAL_RUNTIME_MODE = "headless"   # 或 auto / roxy
+$env:PAYPAL_ROXY_API_KEY = "your_key"  # roxy / auto 时
+.\.venv\Scripts\python.exe main.py --country JP --ba-token BA-xxx --phone +81... --runtime headless
+```
 
 ## 9. 冒烟自检
 
 1. `GET /api/health` 200  
-2. 浏览器打开首页，创建任务（格式合法的假 BA 即可）  
+2. 浏览器打开首页，**关闭代理**（或清空代理框），创建任务（格式合法的假 BA 即可）  
 3. 日志应出现：`Phase 0` → `Phase 1: Risk control` → `Phase 2`  
 4. 假 BA 最终失败信息常为 `INVALID_TOKEN` / `generic-error` / `authchallenge` / `no valid EC token`  
-5. 单元测试：`python -m pytest tests -q`（约 65+）
+5. 单元测试：`python -m pytest tests -q`（约 65+）  
+6. 若一启动就报代理错误：先关代理再跑；真 BA 再开住宅代理并先点「测试代理」
 
 ## 10. 更多
 

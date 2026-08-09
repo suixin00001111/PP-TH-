@@ -3,7 +3,7 @@
 > **Audience:** another coding agent continuing this repo.  
 > **Repo:** https://github.com/suixin00001111/PP-TH-  
 > **Docs updated:** 2026-08-10  
-> **Recent themes:** (1) Windows runnable (TLS CA, proxy direct, device cookie); (2) Brazil-public protocol order (Phase1 before Phase2, dynamic ModXO ids).  
+> **Recent themes:** (1) Windows runnable (TLS CA, proxy direct, device cookie); (2) Brazil-public protocol order (Phase1 before Phase2, dynamic ModXO); (3) Web locks risk knobs to pure protocol; (4) proxy probe CA + accurate error classes (no false forbidden-IP).  
 > **Language:** English for machine clarity; product UI/logs often Chinese.
 
 Read this **before** changing flow, proxy, session, or web job ownership. Do not treat public SaaS sites as source-of-truth code; this tree is the implementation.
@@ -18,11 +18,13 @@ Read this **before** changing flow, proxy, session, or web job ownership. Do not
 | What it is **not** | Not a clone of `pay.153.ink` / private pay153 deploy; not a remote job platform client |
 | Product line | **A-layer BA** Phase 0–4; optional B/C merchant chain (default **off** in Web) |
 | Default runtime | Pure protocol: `fingerprint=random`, `datadome=protocol`, `mtr=python_generated` |
+| Web risk knobs | **Forced** pure protocol in `create_job` (ignores client headless/roxy); UI shows read-only Brazil trio |
 | Phase order | **0 → 1 (risk beacons) → 2 → 3 → 4** (aligned with Brazil public package) |
 | ModXO action ids | **Dynamic-first** (`PAYPAL_MODXO_STATIC_ACTION_IDS=0`); static capture only as opt-in fallback |
+| Proxy hard-fail | **Only when user filled a proxy URL** (`require_proxy=bool(filled_raw)`); empty → direct |
 | Entry points | `web.py` (HTTP UI/API), `main.py` (CLI), `start.bat` / `start.sh` |
 | Core engine | `paypal/flow.py` → `PayPalFlow` (very large; TH-shaped multi-country protocol) |
-| Success criteria (local) | Install deps → Web up → `/api/health` → create job → Phase 0 page load → Phase 2 actions against PayPal |
+| Success criteria (local) | Install deps → Web up → `/api/health` → create job (proxy off) → Phase 0 page 200 → Phase1 → Phase2 → fake BA `INVALID_TOKEN` |
 | Full BA success needs | **Real unexpired BA token** + **target-country residential proxy** (or working TUN) + phone/OTP (manual or SMSBower) |
 
 Fake tokens (`BA-TEST…`, `BA-ABCDEF…`) are only for **smoke**. Expect PayPal `INVALID_TOKEN` / `generic-error` / `authchallenge` / “no EC token” — that is **not** “project broken”. A healthy smoke path logs Phase0 page 200 → Phase1 risk beacons → Phase2 server actions, then fails on token/risk.
@@ -280,12 +282,27 @@ Key test files:
 4. **Phone CC** on Continue_To_Payment: protocol `phone_cc`, not hard-coded `+55`.
 5. Docs: `PROTOCOL_CHAIN.md`, `.env.example`, this handoff.
 
+### C. Web pure-protocol lock (`b371986`)
+
+1. UI: three selects → read-only Brazil knobs + hidden fixed fields.
+2. `create_job`: always `random` / `protocol` / `python_generated` / `runtime_mode=protocol`.
+3. `/api/runtime`: choice lists only pure-protocol values.
+4. Headless/Roxy remain CLI/env advanced paths only.
+
+### D. Proxy diagnose accuracy (`647a05d`)
+
+1. `probe_proxy_entry` uses `ensure_ssl_cert_env()` CA (curl 77 on Chinese paths).
+2. `require_proxy = bool(filled_raw)` only — enabled+empty must not hard-fail on dead 7897.
+3. `classify_proxy_transport_error`: keep resolve Chinese text; prefer curl 35/77 over false “forbidden IP”.
+4. Observed maintainer Windows: Clash 7897 listens but HTTPS via it fails (curl 35); **direct PayPal 200 OK**.
+
 ---
 
 ## 11. Known limitations / open risks
 
 - Full live BA success rate depends on **exit IP quality**, token freshness, and PayPal risk — not unit-testable end-to-end here.
-- Half-open Windows “系统代理” without TUN still confuses humans; code should prefer direct when not required.
+- Half-open Windows “系统代理” without TUN still confuses humans; code prefers **direct** when no filled URL.
+- LocalStorage may still remember old “proxy on” — tell users to toggle off + hard refresh after upgrades.
 - `flow.py` is huge (~8k+ lines); surgical edits only; prefer existing helpers.
 - Static ModXO action ids can go stale → code refreshes from JS chunks; watch `continue_to_payment_no_redirect`.
 - CAPTCHA: manual/official path; external solvers disabled by design in observed logs.
@@ -325,11 +342,12 @@ Priority order usually:
 Repo: https://github.com/suixin00001111/PP-TH-
 Read: AI_HANDOFF.md, README.md, PROTOCOL_CHAIN.md, PROXY.md, SETUP.md
 Stack: local multi-country PayPal BA pure HTTP + web.py
-Defaults: protocol/random/python_generated; Phase0→1→2→3→4; ModXO dynamic-first
-Windows: ssl_env CA mirror, direct proxy when unset, device cookie on index
-Smoke: health + fake BA → Phase0/1/2 then INVALID_TOKEN or authchallenge (OK)
-Do not require system Clash for no-proxy jobs. Do not commit .env.
-Live success: real BA + residential proxy + OTP. Brazil public is reference order only.
+Web fixed: fingerprint=random, DataDome=protocol, MTR=python_generated (Brazil)
+Phase order: 0→1→2→3→4; ModXO dynamic-first
+Windows: ssl_env CA for session+proxy probe; require_proxy only if proxy URL filled
+Smoke: proxy OFF + fake BA → Phase0/1/2 → INVALID_TOKEN (OK)
+Do not hard-fail on half-open Clash 7897 without filled URL. Do not commit .env.
+Live success: real BA + residential proxy (test first) or TUN + OTP.
 ```
 
 ---
