@@ -583,23 +583,35 @@ def resolve_outbound_proxy(
     filled_raw: str | None = None,
     *,
     allow_system_fallback: bool = True,
+    require_proxy: bool = True,
     timeout: float = 12.0,
-) -> tuple[ProxyEntry, str, int, str]:
-    """Resolve outbound proxy like Brazil daily usage + residential fill.
+) -> tuple[ProxyEntry | None, str, int, str]:
+    """Resolve outbound proxy for a job.
 
-    Strategy (aligned with openai-paypal / Brazil ops):
-      - If Windows 系统代理 is ON, try local client proxy FIRST (127.0.0.1:789x).
-        Brazil runs usually ride the client/TUN path rather than raw residential.
-      - Then try the user-filled residential URL (socks5h/http auto).
-      - Then try system proxy again as fallback.
+    Strategy:
+      1) User-filled residential / custom URL first (explicit intent wins).
+      2) Working local/system proxy (Clash 系统代理 / 常见本地端口) as soft assist
+         — only when a proxy is required or system-proxy assist is enabled.
+      3) If nothing works:
+           - require_proxy=True  -> raise with actionable Chinese error
+           - require_proxy=False -> return (None, "", 0, "direct") so the job can
+             continue on the machine's default network path (TUN/direct).
 
-    Returns (entry, exit_ip, latency_ms, note).
+    Returns (entry|None, exit_ip, latency_ms, note).
     """
     filled_raw = (filled_raw or "").strip()
     notes: list[str] = []
     filled_entry: ProxyEntry | None = None
-    system_entry = get_system_proxy_entry() if allow_system_fallback else None
-    system_on = _windows_system_proxy_enabled()
+
+    # Respect PAYPAL_USE_SYSTEM_PROXY / config.USE_SYSTEM_PROXY: when user did not
+    # fill a proxy and did not require one, skip probing half-broken local ports
+    # (saves many seconds of SSL timeouts on Clash "系统代理" without TUN).
+    use_system_cfg = parse_bool(os.getenv("PAYPAL_USE_SYSTEM_PROXY"), _CFG_USE_SYSTEM_PROXY)
+    want_system = bool(allow_system_fallback) and (
+        bool(require_proxy) or bool(filled_raw) or bool(use_system_cfg)
+    )
+    system_entry = get_system_proxy_entry() if want_system else None
+    system_on = _windows_system_proxy_enabled() if want_system else False
 
     def _try_entry(entry: ProxyEntry, tag: str) -> tuple[ProxyEntry, str, int, str] | None:
         try:
@@ -617,13 +629,12 @@ def resolve_outbound_proxy(
             notes.append(f"{tag}: {exc}")
             return None
 
-    # 1) System first when Windows 系统代理 is enabled (Brazil-like)
-    if system_entry is not None and system_on:
-        hit = _try_entry(system_entry, f"system-first:{system_entry.label}")
-        if hit:
-            return hit
+    # Fast path: no proxy requested and system assist off → direct immediately.
+    if not filled_raw and not require_proxy and not want_system:
+        return None, "", 0, "direct"
 
-    # 2) User-filled residential / custom
+    # 1) User-filled residential / custom first — explicit form input must win
+    # over a half-broken Windows "系统代理" that only opens a local port.
     if filled_raw:
         try:
             filled_entry = ProxyEntry.parse(filled_raw)
@@ -638,46 +649,38 @@ def resolve_outbound_proxy(
                     tag = f"filled-auto-{working.scheme}"
                 return working, exit_ip, latency_ms, tag
 
-    # 3) System fallback even if ProxyEnable is off but local port is open
+    # 2) System / local client proxy (only when it actually completes HTTPS)
     if system_entry is not None:
-        hit = _try_entry(system_entry, f"system-fallback:{system_entry.label}")
+        tag = f"system-first:{system_entry.label}" if system_on else f"system-fallback:{system_entry.label}"
+        hit = _try_entry(system_entry, tag)
         if hit:
             return hit
 
-    # Compose actionable error (Chinese)
-    filled_msg = ""
-    system_msg = ""
-    for n in notes:
-        low = n.lower()
-        if "filled" in low or "forbidden ip" in low or "114." in n:
-            filled_msg = n
-        if "system" in low:
-            system_msg = n
-    if not filled_msg:
-        filled_msg = next((n for n in notes if "forbidden" in n.lower() or "filled" in n.lower()), "")
-    if not system_msg:
-        system_msg = next((n for n in notes if "system" in n.lower()), "")
+    # 3) Optional direct path — do not hard-fail jobs that never asked for a proxy
+    if not require_proxy:
+        detail = " | ".join(notes[-3:]) if notes else "no proxy requested"
+        return None, "", 0, f"direct ({detail})" if notes else "direct"
 
+    # Compose actionable error (Chinese)
     parts = [
-        "出网探测失败（已按巴西用法尝试：系统代理/填写代理）。",
+        "出网探测失败（已尝试：填写代理 → 系统/本地代理）。",
     ]
     if filled_raw:
         parts.append(
-            "填写的住宅代理：当前公网 IP 常被 cliproxy 拒绝（forbidden ip not supported）；"
-            "关 TUN 直连节点会被拒，这与 socks5/http 写法无关。"
+            "填写的住宅代理不可用：请检查账号/白名单/节点；"
+            "cliproxy 常见报错 forbidden ip not supported（需加白本机公网 IP 或开 TUN）。"
         )
     if system_entry is not None:
         parts.append(
             f"系统代理已检测到 {system_entry.label}，但当前无法完成 HTTPS 出网"
             "（常见：只开了系统代理开关、未开 TUN，或客户端无可用节点）。"
-            "巴西项目能跑，多半是开了 TUN/虚拟网卡，流量在系统层已出网。"
         )
     else:
-        parts.append("未检测到本地系统代理（Clash 系统代理未开或端口未监听）。")
+        parts.append("未检测到可用的本地系统代理（Clash 系统代理未开或端口未监听）。")
     parts.append(
-        "可行处理：1) 打开客户端 TUN/虚拟网卡后再跑（可清空代理框，与巴西一致）；"
-        "2) 或在 cliproxy 后台把本机公网 IP 加白名单后关 TUN 用填写代理；"
-        "3) 系统代理模式需客户端本身已能浏览器正常上网。"
+        "可行处理：1) 在 Web 填写可用住宅代理并点「测试代理」；"
+        "2) 打开客户端 TUN/虚拟网卡后再跑；"
+        "3) 若本机已能直连外网，可关闭代理开关用直连（仅调试；真机 BA 仍建议目标国出口）。"
     )
     detail = " | ".join(notes[-4:])
     if detail:

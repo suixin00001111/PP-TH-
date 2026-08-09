@@ -8,6 +8,11 @@ import urllib.parse
 
 import httpx
 
+from paypal.ssl_env import ensure_ssl_cert_env
+
+# curl_cffi loads CA via libcurl; non-ASCII Windows user paths break it (curl 77).
+ensure_ssl_cert_env()
+
 try:
     from curl_cffi import CurlMime  # pyright: ignore[reportMissingImports]
     from curl_cffi.requests import Session as CurlSession  # pyright: ignore[reportMissingImports]
@@ -573,22 +578,52 @@ class PayPalSession:
         if proxy_url:
             client_kwargs["proxy"] = proxy_url
         if self._use_curl:
+            # Re-apply before each session in case env was scrubbed by proxy helpers.
+            ca_path = ensure_ssl_cert_env()
             impersonate = os.getenv("PAYPAL_CURL_IMPERSONATE", "chrome").strip() or "chrome"
             curl_session_factory = cast(Any, globals().get("CurlSession"))
             if curl_session_factory is None:
                 raise RuntimeError("curl_cffi is not available")
-            self.client = curl_session_factory(impersonate=impersonate)
-            self.client.headers.update(build_common_headers(state))
-            self.client.timeout = 30
-            self.client.allow_redirects = False
-            # Explicit only: never inherit OS/env/TUN app-proxy settings.
-            if hasattr(self.client, "trust_env"):
-                self.client.trust_env = False
-            if proxy_url:
-                self.client.proxies = {"https": proxy_url, "http": proxy_url}
-            else:
-                self.client.proxies = {}
-            logger.info("HTTP client: curl_cffi ({})", impersonate)
+            try:
+                self.client = curl_session_factory(impersonate=impersonate)
+                self.client.headers.update(build_common_headers(state))
+                self.client.timeout = 30
+                self.client.allow_redirects = False
+                # Explicit only: never inherit OS/env/TUN app-proxy settings.
+                if hasattr(self.client, "trust_env"):
+                    self.client.trust_env = False
+                if proxy_url:
+                    self.client.proxies = {"https": proxy_url, "http": proxy_url}
+                else:
+                    self.client.proxies = {}
+                # Smoke the CA path once so we can fall back before Phase 0.
+                if os.getenv("PAYPAL_CURL_SKIP_CA_PROBE", "").strip().lower() not in {
+                    "1", "true", "yes", "on",
+                }:
+                    try:
+                        # HEAD may be blocked; any transport-level success is enough.
+                        self.client.request(
+                            "GET",
+                            "https://www.paypal.com/robots.txt",
+                            timeout=8,
+                        )
+                    except Exception as probe_exc:
+                        msg = str(probe_exc)
+                        if "curl: (77)" in msg or "trust anchors" in msg.lower():
+                            raise RuntimeError(
+                                f"curl_cffi CA bundle unusable ({ca_path}): {probe_exc}"
+                            ) from probe_exc
+                        # Network/proxy errors are fine — CA loaded successfully.
+                logger.info("HTTP client: curl_cffi ({}) ca={}", impersonate, ca_path)
+            except Exception as curl_exc:
+                logger.warning(
+                    "curl_cffi unavailable ({}), falling back to httpx: {}",
+                    type(curl_exc).__name__,
+                    curl_exc,
+                )
+                self._use_curl = False
+                self.client = httpx.Client(**client_kwargs)
+                logger.info("HTTP client: httpx (http2={}) fallback", client_kwargs.get("http2"))
         else:
             self.client = httpx.Client(**client_kwargs)
             logger.info("HTTP client: httpx (http2={})", client_kwargs.get("http2"))

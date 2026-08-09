@@ -25,6 +25,11 @@ from urllib.parse import unquote, urlparse
 
 from loguru import logger
 
+# Fix curl_cffi CA path on non-ASCII Windows user profiles before any HTTP client starts.
+from paypal.ssl_env import ensure_ssl_cert_env
+
+ensure_ssl_cert_env()
+
 from paypal.flow import PayPalFlow
 from paypal.models import BillingAddress, CardInfo, UserInfo
 from paypal.oaipy_data import generate_address, generate_card, generate_oaipy_profile, generate_user
@@ -613,6 +618,13 @@ def classify_proxy_transport_error(msg: str, body: str = "") -> str:
         )
     if "could not resolve" in low or "getaddrinfo" in low:
         return f"代理域名无法解析：{msg}"
+    if "curl: (77)" in low or "trust anchors" in low or "cacert" in low:
+        return (
+            "TLS 证书库加载失败（curl 77）。常见于 Windows 用户名含中文时 certifi 路径无法被 libcurl 读取。"
+            "程序会自动把 CA 复制到 ASCII 路径；若仍失败请更新 curl_cffi/certifi，或设置 "
+            "PAYPAL_USE_CURL_CFFI=0 改用 httpx。"
+            f" 原始：{msg[:160]}"
+        )
     if "failed to perform" in low and ("proxy" in low or "curl:" in low):
         return (
             f"代理链路不可用：{msg[:180]}。"
@@ -1530,35 +1542,52 @@ def run_job(job: WebJob) -> None:
             try:
                 filled_raw = ""
                 if proxy_config.enabled and proxy_config.entry:
-                    filled_raw = proxy_config.entry.url or ""
-                # Brazil-like: filled residential first; if provider bans China IP,
-                # automatically use Windows 系统代理 (e.g. 127.0.0.1:7897).
+                    filled_raw = (proxy_config.entry.url or "").strip()
+                # Only hard-require a working proxy when the user explicitly enabled
+                # one or pasted a proxy URL. Otherwise allow direct / soft system assist
+                # so a half-broken Clash "系统代理" port does not block the whole job.
+                require_proxy = bool(filled_raw) or bool(proxy_config.enabled and proxy_config.entry)
                 working, exit_ip, latency_ms, note = resolve_outbound_proxy(
                     filled_raw,
                     allow_system_fallback=True,
+                    require_proxy=require_proxy,
                     timeout=15.0,
                 )
                 original_scheme = (
                     proxy_config.entry.scheme if proxy_config.entry else ""
                 )
-                proxy_config = ProxyConfig(
-                    enabled=True,
-                    entry=working,
-                    resolved_from=note,
-                )
+                if working is not None:
+                    proxy_config = ProxyConfig(
+                        enabled=True,
+                        entry=working,
+                        resolved_from=note,
+                    )
+                else:
+                    # Direct path: keep proxy disabled; PayPalSession uses no proxy URL.
+                    proxy_config = ProxyConfig(
+                        enabled=False,
+                        entry=None,
+                        resolved_from=note or "direct",
+                    )
                 job._proxy_config = proxy_config
                 logger.info(
-                    "Proxy resolved for job: {} exit_ip={} latency={}ms note={} filled_scheme={}",
+                    "Proxy resolved for job: {} exit_ip={} latency={}ms note={} filled_scheme={} require_proxy={}",
                     proxy_config.label,
                     exit_ip or "",
                     latency_ms,
                     note,
                     original_scheme,
+                    require_proxy,
                 )
-                if "system-fallback" in note or note.startswith("system"):
+                if working is None:
                     logger.warning(
-                        "Using system/local proxy path ({}). "
-                        "Filled cliproxy was skipped or blocked for this network.",
+                        "No working proxy selected ({}); continuing on direct network path. "
+                        "For live BA success use a target-country residential proxy.",
+                        note,
+                    )
+                elif "system" in str(note).lower():
+                    logger.warning(
+                        "Using system/local proxy path ({}).",
                         note,
                     )
             except Exception:
@@ -1980,6 +2009,21 @@ class WebHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store" if resolved.name == "index.html" else "public, max-age=3600")
         self.send_security_headers()
+        # Ensure browser gets device cookie on first page load (not only on JSON APIs).
+        if resolved.name == "index.html":
+            self.get_device_id()
+            device_cookie = getattr(self, "_set_device_cookie", "")
+            if device_cookie:
+                cookie_attrs = [
+                    f"{DEVICE_COOKIE_NAME}={device_cookie}",
+                    "Path=/",
+                    f"Max-Age={DEVICE_COOKIE_MAX_AGE}",
+                    "SameSite=Strict",
+                    "HttpOnly",
+                ]
+                if COOKIE_SECURE:
+                    cookie_attrs.append("Secure")
+                self.send_header("Set-Cookie", "; ".join(cookie_attrs))
         self.end_headers()
         self.wfile.write(data)
 

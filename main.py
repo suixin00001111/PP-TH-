@@ -6,6 +6,10 @@ import sys
 from pathlib import Path
 from loguru import logger
 
+from paypal.ssl_env import ensure_ssl_cert_env
+
+ensure_ssl_cert_env()
+
 from paypal.oaipy_data import generate_user, generate_card, generate_address
 from paypal.regions import normalize_region
 from paypal.flow import PayPalFlow

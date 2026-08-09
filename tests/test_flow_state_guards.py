@@ -139,9 +139,9 @@ def patched_signals():
 
 
 class FlowStateGuardTests(unittest.TestCase):
-    def test_phase0_datadome_fails_without_empty_token_post(self):
-        # Brazil-depth protocol fallback still tries the empty-token POST once.
-        # If the challenge remains, Phase 0 must fail hard (no silent continue).
+    def test_phase0_datadome_protocol_continues_after_empty_token_post(self):
+        # Protocol mode matches openai-paypal peer: one empty-token POST, then
+        # continue with captured client-id edges instead of hard-failing Phase 0.
         session = FakeSession(
             gets=[FakeResponse(status_code=403, text="DataDome challenge") for _ in range(4)],
             posts=[FakeResponse(status_code=403, text="DataDome challenge still blocked")],
@@ -149,10 +149,10 @@ class FlowStateGuardTests(unittest.TestCase):
         flow = make_flow(session)
 
         with patch("paypal.flow.PayPalSession", return_value=session), patch("paypal.flow.time.sleep"):
-            with self.assertRaisesRegex(RuntimeError, "DataDome challenge"):
-                flow._phase0_initial_load()
+            flow._phase0_initial_load()
 
         self.assertEqual(len(session.post_calls), 1)
+        self.assertTrue(getattr(flow, "_phase0_datadome_blocked", False))
 
     def test_missing_modxo_ids_cannot_continue_without_ec(self):
         session = FakeSession(
@@ -244,9 +244,9 @@ class FlowStateGuardTests(unittest.TestCase):
         with patched_signals(), self.assertRaisesRegex(RuntimeError, "refusing to substitute"):
             flow._phase3_signup_and_2fa()
 
-    def test_phase0_hard_datadome_page_fails_after_load(self):
-        # 200 challenge page (no empty-token POST path) must still hard-fail before
-        # static ModXO action ids are trusted for Phase 2.
+    def test_phase0_hard_datadome_page_marks_blocked_in_protocol_mode(self):
+        # 200 challenge page: protocol mode records the block and continues
+        # (headless/roxy modes still hard-fail via _raise_if_phase0_still_datadome_blocked).
         session = FakeSession(
             gets=[
                 FakeResponse(
@@ -262,10 +262,10 @@ class FlowStateGuardTests(unittest.TestCase):
         flow = make_flow(session)
 
         with patch("paypal.flow.PayPalSession", return_value=session), patch("paypal.flow.time.sleep"):
-            with self.assertRaisesRegex(RuntimeError, r"Phase 0 still blocked by DataDome"):
-                flow._phase0_initial_load()
+            flow._phase0_initial_load()
 
         self.assertEqual(session.post_calls, [])
+        self.assertTrue(getattr(flow, "_phase0_datadome_blocked", False))
 
     def test_ineligible_modxo_redirect_is_rejected(self):
         ineligible_url = (
