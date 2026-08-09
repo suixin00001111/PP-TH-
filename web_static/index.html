@@ -82,31 +82,21 @@
           </label>
           <p id="phoneHint" class="field-hint">未开 SMSBower 时请手填该国完整手机号</p>
           </div>
-          <label>
-            <span>浏览器指纹来源</span>
-            <select id="fingerprintSource" name="fingerprintSource">
-              <option value="random" selected>程序随机生成（纯协议，推荐）</option>
-              <option value="headless">本地 Headless（Playwright）</option>
-              <option value="roxy">Roxy 指纹浏览器</option>
-            </select>
-          </label>
-          <label>
-            <span>DataDome 模式</span>
-            <select id="datadomeMode" name="datadomeMode">
-              <option value="protocol" selected>协议边缘模拟（纯协议，推荐）</option>
-              <option value="headless">本地 Headless（Playwright）</option>
-              <option value="roxy">Roxy 浏览器执行</option>
-            </select>
-          </label>
-          <label>
-            <span>MTR sealedResult</span>
-            <select id="mtrRuntime" name="mtrRuntime">
-              <option value="python_generated" selected>程序模板生成（纯协议，推荐）</option>
-              <option value="headless">本地 Headless（Playwright）</option>
-              <option value="roxy">Roxy 浏览器执行</option>
-            </select>
-          </label>
-          <p class="field-hint">巴西脚本同款三项：纯协议=随机指纹+协议DD+模板MTR，不弹浏览器；选 Headless/Roxy 才会开浏览器。</p>
+          <div class="field-block runtime-fixed">
+            <div class="section-title compact">
+              <h3>风控三项（巴西纯协议）</h3>
+            </div>
+            <ul class="runtime-fixed-list">
+              <li><strong>浏览器指纹来源</strong>：程序随机生成（random）</li>
+              <li><strong>DataDome 模式</strong>：协议边缘模拟（protocol）</li>
+              <li><strong>MTR sealedResult</strong>：程序模板生成（python_generated）</li>
+            </ul>
+            <p class="field-hint">对齐巴西公开包：固定纯 HTTP，不弹浏览器 / 不走 Roxy。无需再选手动模式。</p>
+            <!-- hidden fixed knobs for form payload compatibility -->
+            <input type="hidden" id="fingerprintSource" name="fingerprintSource" value="random" />
+            <input type="hidden" id="datadomeMode" name="datadomeMode" value="protocol" />
+            <input type="hidden" id="mtrRuntime" name="mtrRuntime" value="python_generated" />
+          </div>
           <label>
             <span>Buyer 身份模式</span>
             <select id="buyerIdentityMode" name="buyerIdentityMode">

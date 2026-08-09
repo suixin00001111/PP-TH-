@@ -36,20 +36,15 @@ RUNTIME_MODE = "protocol"
 
 # Fine risk modes (openai-paypal compatible).
 # When RUNTIME_MODE is set, runtime_config maps coarse->fine unless env overrides.
-# 浏览器指纹来源（巴西 openai-paypal 同款）：
-#   random   = 程序内合成 UA/canvas/WebGL 等（纯协议，不弹浏览器）
-#   headless = 本机 Playwright 读真实 runtime
-#   roxy     = Roxy 指纹浏览器读真实 runtime
+# 风控三项（对齐巴西公开包 paypal-pay-public-nocdk，默认纯协议）：
+#   浏览器指纹来源 = random（程序合成，不弹浏览器）
+#   DataDome 模式   = protocol（协议边缘 / cookie 续跑）
+#   MTR sealedResult = python_generated（模板生成，不跑浏览器 dfp.js）
+# Web UI 固定这三项；CLI 仍可通过 env 覆盖 headless/roxy（高级）。
 FINGERPRINT_SOURCE = "random"
-# DataDome：
-#   protocol = 协议边缘模拟（纯协议）
-#   headless / roxy = 浏览器执行 challenge
 DATADOME_MODE = "protocol"
 DATADOME_ROXY_WAIT_SECONDS = 12.0
 DATADOME_HEADLESS_WAIT_SECONDS = 14.0
-# MTR sealedResult：
-#   python_generated = 程序模板生成（纯协议）
-#   headless / roxy = 浏览器执行 dfp.js
 MTR_RUNTIME_MODE = "python_generated"
 MTR_ROXY_WAIT_SECONDS = 20.0
 MTR_HEADLESS_WAIT_SECONDS = 20.0

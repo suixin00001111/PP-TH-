@@ -435,44 +435,28 @@ function setSelectIfValid(sel, value, fallback) {
   else if (fallback) sel.value = fallback;
 }
 
-function normalizeFingerprintSource(v) {
-  // Brazil-compatible: random | headless | roxy
-  const x = String(v || "random").trim().toLowerCase().replace(/-/g, "_");
-  if (x === "headless" || x === "local_headless" || x === "playwright" || x === "local_playwright") return "headless";
-  if (x === "roxy" || x === "browser" || x === "roxy_browser") return "roxy";
-  // program/python/synthetic/auto/empty -> random (pure protocol)
+function normalizeFingerprintSource(_v) {
+  // Brazil pure-protocol only (no headless/roxy knobs in UI).
   return "random";
 }
 
 
-function normalizeDatadomeMode(v) {
-  // Brazil-compatible: protocol | headless | roxy
-  const x = String(v || "protocol").trim().toLowerCase().replace(/-/g, "_");
-  if (x === "headless" || x === "local_headless" || x === "playwright" || x === "local_playwright") return "headless";
-  if (x === "roxy" || x === "browser") return "roxy";
-  // protocol/edge/auto/off/empty -> protocol
+function normalizeDatadomeMode(_v) {
+  // Brazil pure-protocol only.
   return "protocol";
 }
 
 
-function normalizeMtrRuntime(v) {
-  // Brazil-compatible: python_generated | headless | roxy
-  const x = String(v || "python_generated").trim().toLowerCase().replace(/-/g, "_");
-  if (x === "headless" || x === "local_headless" || x === "playwright" || x === "local_playwright") return "headless";
-  if (x === "roxy" || x === "browser") return "roxy";
-  // python_generated/python/protocol/auto/block/off/empty -> python_generated
+function normalizeMtrRuntime(_v) {
+  // Brazil pure-protocol only (template sealedResult).
   return "python_generated";
 }
 
 
 
 function needsRoxyConfig() {
-  const modes = [
-    normalizeFingerprintSource($("#fingerprintSource")?.value || "random"),
-    normalizeDatadomeMode($("#datadomeMode")?.value || "protocol"),
-    normalizeMtrRuntime($("#mtrRuntime")?.value || "python_generated"),
-  ];
-  return modes.some((m) => m === "roxy" || m === "auto");
+  // Web path is pure protocol (Brazil); Roxy panel stays optional/manual only.
+  return false;
 }
 
 function syncRoxyPanel() {
@@ -576,27 +560,31 @@ function normalizeBuyerIdentityMode(value) {
 }
 
 function getRuntimePayload() {
+  // Fixed Brazil pure-protocol knobs — UI no longer offers headless/roxy.
   return {
-    fingerprint_source: normalizeFingerprintSource($("#fingerprintSource")?.value || "random"),
-    datadome_mode: normalizeDatadomeMode($("#datadomeMode")?.value || "protocol"),
-    mtr_runtime: normalizeMtrRuntime($("#mtrRuntime")?.value || "python_generated"),
+    fingerprint_source: "random",
+    datadome_mode: "protocol",
+    mtr_runtime: "python_generated",
+    runtime_mode: "protocol",
     buyer_identity_mode: normalizeBuyerIdentityMode($("#buyerIdentityMode")?.value || "legacy"),
   };
 }
 
 function loadRuntimePrefs() {
   try {
-    // Default pure protocol stack (no Chromium/Roxy popup).
-    // Clear legacy sticky auto/roxy/headless prefs so UI stays protocol-first.
+    // Force pure protocol; drop any legacy headless/roxy sticky prefs.
     try {
       localStorage.removeItem(FP_KEY);
       localStorage.removeItem(DD_KEY);
       localStorage.removeItem(MTR_KEY);
       localStorage.removeItem(RUNTIME_KEY);
     } catch (e0) {}
-    setSelectIfValid(document.querySelector("#fingerprintSource"), "random", "random");
-    setSelectIfValid(document.querySelector("#datadomeMode"), "protocol", "protocol");
-    setSelectIfValid(document.querySelector("#mtrRuntime"), "python_generated", "python_generated");
+    const fp = document.querySelector("#fingerprintSource");
+    const dd = document.querySelector("#datadomeMode");
+    const mtr = document.querySelector("#mtrRuntime");
+    if (fp) fp.value = "random";
+    if (dd) dd.value = "protocol";
+    if (mtr) mtr.value = "python_generated";
     const sb = localStorage.getItem(SMSBOWER_ON_KEY);
     if (sb != null && document.querySelector("#smsbowerEnabled")) {
       document.querySelector("#smsbowerEnabled").checked = sb === "1";

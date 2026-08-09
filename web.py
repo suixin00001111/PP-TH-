@@ -731,7 +731,7 @@ class WebJob:
     ba_token: str
     phone: str
     country: str = "TH"
-    runtime_mode: str = "headless"
+    runtime_mode: str = "protocol"
     profile: str = "real"
     fingerprint_source: str = "random"
     datadome_mode: str = "protocol"
@@ -1336,16 +1336,12 @@ def create_job(
     profile = "real"  # Web UI is real-run only (no test/smoke profile)
     continue_merchant = False  # A-layer only (aligned with openai-paypal; no B/C switch)
 
-    # Pure-protocol fine knobs (Brazil config success path: random/protocol/python_generated)
-    fingerprint_source = str(fingerprint_source or "random").strip().lower().replace("-", "_")
-    datadome_mode = str(datadome_mode or "protocol").strip().lower().replace("-", "_")
-    mtr_runtime = str(mtr_runtime or "python_generated").strip().lower().replace("-", "_")
-    if fingerprint_source not in FINGERPRINT_SOURCE_CHOICES:
-        raise ValueError(f"unsupported fingerprint_source: {fingerprint_source}")
-    if datadome_mode not in DATADOME_MODE_CHOICES:
-        raise ValueError(f"unsupported datadome_mode: {datadome_mode}")
-    if mtr_runtime not in MTR_RUNTIME_CHOICES:
-        raise ValueError(f"unsupported mtr_runtime: {mtr_runtime}")
+    # Web path = Brazil pure-protocol only (ignore client headless/roxy knobs).
+    # fingerprint=random, DataDome=protocol, MTR=python_generated template.
+    fingerprint_source = "random"
+    datadome_mode = "protocol"
+    mtr_runtime = "python_generated"
+    risk_signals_mode = "protocol"
 
     buyer_identity_mode = str(buyer_identity_mode or "legacy").strip().lower().replace("-", "_").replace(" ", "_")
     if buyer_identity_mode in {"", "original", "default", "classic", "v1", "phase4"}:
@@ -1366,20 +1362,9 @@ def create_job(
     roxy_api_port = max(1, min(roxy_api_port, 65535))
     roxy_workspace_id = (roxy_workspace_id or "").strip()
     roxy_project_id = (roxy_project_id or "").strip()
-    if roxy_modes_need_key(fingerprint_source, datadome_mode, mtr_runtime):
-        env_key = (os.getenv("PAYPAL_ROXY_API_KEY") or os.getenv("ROXY_API_KEY") or "").strip()
-        if not roxy_api_key and not env_key:
-            raise ValueError("已选择 Roxy/自动，请在前端填写 Roxy API Key，或配置环境变量 PAYPAL_ROXY_API_KEY")
-        apply_web_roxy_config(
-            roxy_api_key=roxy_api_key or env_key,
-            roxy_api_host=roxy_api_host,
-            roxy_api_port=roxy_api_port,
-            roxy_headless=bool(roxy_headless),
-            roxy_workspace_id=roxy_workspace_id,
-            roxy_project_id=roxy_project_id,
-        )
-    elif roxy_api_key:
-        # still allow saving key for later even if not used this job
+    # Optional: still accept a Roxy key in payload for future CLI-like use,
+    # but Web jobs never require it (pure protocol).
+    if roxy_api_key:
         apply_web_roxy_config(
             roxy_api_key=roxy_api_key,
             roxy_api_host=roxy_api_host,
@@ -1389,40 +1374,23 @@ def create_job(
             roxy_project_id=roxy_project_id,
         )
 
-    risk_signals_mode = implicit_risk_signals_mode(
-        fingerprint_source,
-        datadome_mode,
-        mtr_runtime,
-        risk_signals_mode,
-    )
-    if risk_signals_mode not in RISK_SIGNALS_MODE_CHOICES:
-        risk_signals_mode = "protocol"
-
-    # Coarse mode for browser engine; fine knobs are source of truth (Brazil Web).
-    # Only honor explicit runtime_mode if the client actually sent one.
-    explicit_runtime = str(runtime_mode or "").strip().lower().replace("-", "_")
-    if explicit_runtime in {"", "default"}:
-        runtime_mode = derive_runtime_mode(fingerprint_source, datadome_mode, mtr_runtime)
-    else:
-        runtime_mode = explicit_runtime
-
+    # Force protocol coarse mode so resolve_and_apply cannot flip to headless/roxy.
+    runtime_mode = "protocol"
     resolved = resolve_and_apply(
-        runtime_mode=runtime_mode,
+        runtime_mode="protocol",
         profile=profile,
-        fingerprint_source=fingerprint_source,
-        datadome_mode=datadome_mode,
-        mtr_runtime=mtr_runtime,
-        risk_signals_mode=risk_signals_mode,
+        fingerprint_source="random",
+        datadome_mode="protocol",
+        mtr_runtime="python_generated",
+        risk_signals_mode="protocol",
         continue_merchant=False,
     )
-    # Prefer explicit fine modes (Brazil path); coarse comes from resolver/engine.
-    runtime_mode = resolved.runtime_mode or runtime_mode
+    runtime_mode = "protocol"
     profile = "real"
-    # fine knobs already validated above — keep them authoritative
-    fingerprint_source = fingerprint_source
-    datadome_mode = datadome_mode
-    mtr_runtime = mtr_runtime
-    risk_signals_mode = risk_signals_mode or resolved.risk_signals_mode
+    fingerprint_source = "random"
+    datadome_mode = "protocol"
+    mtr_runtime = "python_generated"
+    risk_signals_mode = "protocol"
     continue_merchant = False  # never run B/C from Web (A-layer only)
     smsbower_enabled = bool(smsbower_enabled)
     smsbower_api_key = (smsbower_api_key or "").strip()
@@ -1808,20 +1776,26 @@ class WebHandler(BaseHTTPRequestHandler):
                     "runtime_mode": "protocol",
                     "profile": "real",
                 },
-                "resolved": resolved.as_public_dict(),
+                "resolved": {
+                    "fingerprint_source": "random",
+                    "datadome_mode": "protocol",
+                    "mtr_runtime": "python_generated",
+                    "risk_signals_mode": "protocol",
+                    "runtime_mode": "protocol",
+                    "profile": "real",
+                },
                 "profiles": ["real"],
-                "fingerprint_sources": ["random", "headless", "roxy"],
-                "datadome_modes": ["protocol", "headless", "roxy"],
-                "mtr_runtimes": ["python_generated", "headless", "roxy"],
+                # Web UI locks to Brazil pure-protocol; headless/roxy only via CLI/env.
+                "fingerprint_sources": ["random"],
+                "datadome_modes": ["protocol"],
+                "mtr_runtimes": ["python_generated"],
                 "buyer_identity_modes": [
                     {"value": "legacy", "label": "原版流程"},
                     {"value": "elevate_bind", "label": "注册后升 Guest、绑 EC 再授权"},
                 ],
                 "notes": [
-                    "Aligned with Brazil pure-protocol success path: random + protocol + python_generated",
-                    "Roxy optional when Local API + key available",
-                    "auto prefers Roxy then falls back",
-                    "retries available like Brazil Web",
+                    "Web fixed Brazil pure-protocol: fingerprint=random, DataDome=protocol, MTR=python_generated",
+                    "No browser / Roxy knobs on Web (aligned with paypal-pay-public-nocdk)",
                     "Web is real-run only; A-layer only (no merchant B/C)",
                 ],
             })

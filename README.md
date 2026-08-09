@@ -22,7 +22,7 @@
 | 项 | 默认 |
 |----|------|
 | 运行时 | **protocol**（纯 HTTP） |
-| 指纹 / DataDome / MTR | `random` / `protocol` / `python_generated` |
+| 指纹 / DataDome / MTR | **固定** `random` / `protocol` / `python_generated`（巴西纯协议；Web 不再提供 Headless/Roxy 下拉） |
 | 阶段顺序 | **Phase0 → Phase1（风控信标）→ Phase2 → Phase3 → Phase4**（对齐巴西公开包顺序） |
 | ModXO action id | **优先从 HTML/JS 动态提取**；`PAYPAL_MODXO_STATIC_ACTION_IDS=0` |
 | 代理 | 未填写时 **允许直连**；不强制半坏 Clash「系统代理」 |
