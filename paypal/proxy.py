@@ -492,6 +492,16 @@ def _windows_system_proxy_enabled() -> bool:
         return False
 
 
+def _probe_ca_path() -> str:
+    """ASCII-safe CA path for curl_cffi probes (Windows Chinese usernames)."""
+    try:
+        from paypal.ssl_env import ensure_ssl_cert_env
+
+        return str(ensure_ssl_cert_env() or "").strip()
+    except Exception:
+        return ""
+
+
 def probe_proxy_entry(
     entry: ProxyEntry,
     *,
@@ -503,13 +513,17 @@ def probe_proxy_entry(
 
     proxy_url = entry.url
     errors: list[str] = []
+    ca_path = _probe_ca_path()
 
     # 1) curl_cffi (primary for PayPal path)
     try:
         from curl_cffi import requests as curl_requests
 
         started = time.time()
-        with curl_requests.Session(timeout=timeout, impersonate="chrome131") as client:
+        session_kwargs: dict = {"timeout": timeout, "impersonate": "chrome131"}
+        if ca_path:
+            session_kwargs["verify"] = ca_path
+        with curl_requests.Session(**session_kwargs) as client:
             if hasattr(client, "trust_env"):
                 client.trust_env = False
             client.proxies = {"http": proxy_url, "https": proxy_url}
@@ -534,7 +548,10 @@ def probe_proxy_entry(
         import httpx
 
         started = time.time()
-        with httpx.Client(proxy=proxy_url, timeout=timeout, trust_env=False) as client:
+        client_kwargs: dict = {"proxy": proxy_url, "timeout": timeout, "trust_env": False}
+        if ca_path:
+            client_kwargs["verify"] = ca_path
+        with httpx.Client(**client_kwargs) as client:
             resp = client.get(test_url)
             status = int(resp.status_code)
             body = (resp.text or "")[:300]
@@ -560,6 +577,7 @@ def probe_proxy_entry(
             test_url,
             proxies={"http": proxy_url, "https": proxy_url},
             timeout=timeout,
+            verify=ca_path or True,
         )
         status = int(resp.status_code)
         body = (resp.text or "")[:300]

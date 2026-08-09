@@ -559,6 +559,35 @@ def classify_proxy_transport_error(msg: str, body: str = "") -> str:
     """Map curl/proxy transport failures to actionable Chinese guidance."""
     text = f"{msg}\n{body}".strip()
     low = text.lower()
+
+    # Already a Chinese actionable message from resolve_outbound_proxy — keep it.
+    if "出网探测失败" in text or "填写的住宅代理不可用" in text or "系统代理已检测到" in text:
+        return text[:900]
+
+    # Prefer real TLS / CA failures over generic "forbidden IP" (which used to
+    # false-match on long probe error blobs containing "ip" + "not supported").
+    if "curl: (77)" in low or "trust anchors" in low or "error adding trust anchors" in low:
+        return (
+            "TLS 证书库加载失败（curl 77）。常见于 Windows 用户名含中文时 certifi 路径无法被 libcurl 读取。"
+            "程序会自动把 CA 复制到 C:\\ProgramData\\PP-TH\\cacert.pem；若仍失败请重启 Web 或设置 "
+            "PAYPAL_USE_CURL_CFFI=0 改用 httpx。"
+            f" 原始：{msg[:160]}"
+        )
+    if (
+        "curl: (35)" in low
+        or "ssl_connect" in low
+        or "ssl_error_syscall" in low
+        or "unexpected_eof" in low
+        or "eof occurred in violation of protocol" in low
+    ):
+        return (
+            "经代理建立 TLS 失败（SSL 握手被对端关闭）。"
+            "常见：本机 Clash/系统代理半开（只开了系统代理、未开 TUN）、或填写的住宅节点不可用。"
+            "处理：1) 关闭「启用代理」用直连冒烟（本机可直连 PayPal 时）；"
+            "2) 开客户端 TUN 后再测；3) 若用住宅代理，先点「测试代理」确认出口 IP。"
+            f" 原始：{msg[:140]}"
+        )
+
     m = re.search(r"forbidden\s+ip\s*=\s*([0-9.]+)\s*not supported", text, re.I)
     if m:
         return (
@@ -568,7 +597,8 @@ def classify_proxy_transport_error(msg: str, body: str = "") -> str:
             "2) 或在 cliproxy 后台把该 IP 加入白名单后再填自定义代理；"
             "3) 不要同时开 TUN 又填 cliproxy（容易双层代理/超时）。"
         )
-    if "forbidden ip" in low or ("not supported" in low and "ip" in low):
+    # Only treat explicit provider phrases as IP block (avoid false positives).
+    if "forbidden ip" in low or re.search(r"ip\s*=\s*[0-9.]+\s*not supported", low):
         return (
             f"代理拒绝当前接入 IP。原始信息：{text[:180]}。"
             "请到代理商后台检查 IP 白名单/套餐权限。"
@@ -618,17 +648,10 @@ def classify_proxy_transport_error(msg: str, body: str = "") -> str:
         )
     if "could not resolve" in low or "getaddrinfo" in low:
         return f"代理域名无法解析：{msg}"
-    if "curl: (77)" in low or "trust anchors" in low or "cacert" in low:
-        return (
-            "TLS 证书库加载失败（curl 77）。常见于 Windows 用户名含中文时 certifi 路径无法被 libcurl 读取。"
-            "程序会自动把 CA 复制到 ASCII 路径；若仍失败请更新 curl_cffi/certifi，或设置 "
-            "PAYPAL_USE_CURL_CFFI=0 改用 httpx。"
-            f" 原始：{msg[:160]}"
-        )
     if "failed to perform" in low and ("proxy" in low or "curl:" in low):
         return (
             f"代理链路不可用：{msg[:180]}。"
-            "请先测试代理；不可用时清空代理并用 TUN，或修复 cliproxy 白名单/节点。"
+            "请先测试代理；不可用时关闭代理开关用直连/TUN，或修复住宅节点白名单。"
         )
     return text if text else str(msg)
 
@@ -1514,10 +1537,12 @@ def run_job(job: WebJob) -> None:
                 # Only hard-require a working proxy when the user explicitly enabled
                 # one or pasted a proxy URL. Otherwise allow direct / soft system assist
                 # so a half-broken Clash "系统代理" port does not block the whole job.
-                require_proxy = bool(filled_raw) or bool(proxy_config.enabled and proxy_config.entry)
+                # Hard-require only when user pasted a proxy URL.
+                # "Enabled + empty raw" should not hard-fail on half-broken Clash 7897.
+                require_proxy = bool(filled_raw)
                 working, exit_ip, latency_ms, note = resolve_outbound_proxy(
                     filled_raw,
-                    allow_system_fallback=True,
+                    allow_system_fallback=bool(filled_raw) or bool(proxy_config.enabled),
                     require_proxy=require_proxy,
                     timeout=15.0,
                 )
