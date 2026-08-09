@@ -2,6 +2,7 @@
 
 Implements the complete protocol:
   Phase 0: DataDome verification + initial page load
+  Phase 1: Device fingerprint + Tealeaf + analytics (Brazil public-order)
   Phase 2: Create account (email submission → signup page)
   Phase 3: Fill signup form + submit (triggers 2FA SMS)
   Phase 4: OTP verification + final authorize mutation
@@ -1880,10 +1881,18 @@ class PayPalFlow:
 
     @staticmethod
     def _modxo_static_action_ids_enabled() -> bool:
+        """Whether hard-coded ModXO Next-Action ids may be used as *fallback*.
+
+        Brazil public (`paypal-pay-public-nocdk`) always extracts live ids from
+        HTML/JS chunks. Stale static ids are a common cause of authchallenge /
+        "no EC token" on multi-country runs. Default is **off** (dynamic-first);
+        set PAYPAL_MODXO_STATIC_ACTION_IDS=1 only when chunk scan fails and you
+        intentionally want the last-known capture values.
+        """
         raw = (
             _load_proxy_dotenv_value("PAYPAL_MODXO_STATIC_ACTION_IDS")
             or _load_proxy_dotenv_value("PAYPAL_MODXO_HARDCODED_ACTION_IDS")
-            or "1"
+            or "0"
         ).strip().lower()
         return raw not in {
             "0",
@@ -1894,6 +1903,7 @@ class PayPalFlow:
             "disabled",
             "dynamic",
             "scan",
+            "",
         }
 
     @staticmethod
@@ -2475,6 +2485,10 @@ class PayPalFlow:
 
                 try:
                     self._phase0_initial_load()
+                    # Brazil public order: risk beacons before ModXO create-account.
+                    # Skipping this made pure-protocol sessions colder and more
+                    # likely to hit authchallenge / no-EC on Continue_To_Payment.
+                    self._phase1_risk_controls()
                     self._phase2_create_account()
                     self._phase3_signup_and_2fa()
                     if self.buyer_identity_mode == "elevate_bind":
@@ -2824,6 +2838,65 @@ class PayPalFlow:
             static_only,
             bool(getattr(self.state, "datadome_cookie", "")),
         )
+
+    def _phase1_risk_controls(self) -> None:
+        """Send early risk beacons before ModXO create-account (Brazil public order).
+
+        Public BR package runs fingerprint + Tealeaf + analytics on the /pay page
+        *before* Pay_With_Card / Continue_To_Payment. Our multi-country tree used
+        to jump Phase0 → Phase2 and only fire INPUT_PASSWORD fingerprints later,
+        which diverges from a live browser session and correlates with harder
+        authchallenge / missing EC outcomes on pure-protocol runs.
+        """
+        logger.info("--- Phase 1: Risk control signals ---")
+        page_url = (
+            f"https://www.paypal.com/pay?ssrt={self.state.ssrt or ''}"
+            f"&token={self.ba_token}&ul=1"
+        )
+        if self.state.ctx_id:
+            page_url = f"{page_url}&ctxId={self.state.ctx_id}"
+        country = ""
+        try:
+            country = str(self._profile_country() or "")
+        except Exception:
+            country = str(getattr(self.address, "country", "") or "")
+        if country:
+            page_url = f"{page_url}&country.x={country}"
+
+        try:
+            send_device_fingerprint(
+                self.session,
+                self.ba_token,
+                app_id="IWC_NEXT_CHECKOUT",
+                referer="https://www.paypal.com/",
+                wrapped=True,
+                page_url=page_url,
+                page_referer="",
+                include_pa=False,
+            )
+        except Exception as exc:
+            logger.warning("Phase 1 device fingerprint failed: {}", exc)
+
+        try:
+            self._send_tealeaf_data(self.session, page_url)
+        except Exception as exc:
+            logger.debug("Phase 1 tealeaf via helper failed: {}; raw fallback", exc)
+            try:
+                send_tealeaf_data(self.session, page_url)
+            except Exception as exc2:
+                logger.warning("Phase 1 tealeaf failed: {}", exc2)
+
+        try:
+            send_analytics_ts(self.session, "main:xo:modxo:login", self.ba_token)
+        except Exception as exc:
+            logger.warning("Phase 1 analytics_ts failed: {}", exc)
+
+        try:
+            send_observability_emit(self.session, self.ba_token)
+        except Exception as exc:
+            logger.warning("Phase 1 observability_emit failed: {}", exc)
+
+        logger.info("Risk control signals sent")
 
     @staticmethod
     def _extract_window_initial_data(html: str) -> dict[str, object]:
@@ -5495,13 +5568,21 @@ class PayPalFlow:
             self.state.modxo_country_action_bound = bound
             logger.info("ModXO country action id: {}", action_id)
 
-    def _modxo_named_action_ids_complete(self) -> bool:
+    def _modxo_core_action_ids_complete(self) -> bool:
+        """Brazil-public minimum: create-account + create-user action ids."""
         return bool(
             self.state.show_create_account_action_id
-            and self.state.create_user_action_id
-            and self.state.submit_public_credential_action_id
-            and self.state.fetch_device_fingerprint_action_id
+            and (self.state.create_user_action_id or self.state.submit_public_credential_action_id)
         )
+
+    def _modxo_named_action_ids_complete(self) -> bool:
+        # Prefer full quartet when present, but Phase2 only needs core pair
+        # (matches paypal-pay-public-nocdk which only extracts two actions).
+        if self._modxo_core_action_ids_complete() and (
+            self.state.submit_public_credential_action_id or self.state.create_user_action_id
+        ) and self.state.fetch_device_fingerprint_action_id:
+            return True
+        return self._modxo_core_action_ids_complete()
 
     def _apply_static_modxo_action_ids(self) -> None:
         if not self._modxo_static_action_ids_enabled():
@@ -5547,6 +5628,9 @@ class PayPalFlow:
         The browser sends these values in the Next-Action header. They are
         deployment-specific, so hard-coding the values from one capture breaks
         after PayPal ships a new bundle.
+
+        Brazil public only requires showCreateAccountAction + createUserAction.
+        We still try to pick up submitPublicCredential / fingerprint when present.
         """
         action_names = {
             "show_create_account_action_id": "showCreateAccountAction",
@@ -5560,11 +5644,16 @@ class PayPalFlow:
             for attr, action_name in action_names.items():
                 if getattr(self.state, attr):
                     continue
+                # Prefer exact JSON-ish name token, then bare identifier.
                 name_idx = text.find(f'"{action_name}"')
                 if name_idx < 0:
+                    name_idx = text.find(action_name)
+                if name_idx < 0:
                     continue
-                window = text[max(0, name_idx - 500):name_idx]
+                window = text[max(0, name_idx - 800): name_idx + len(action_name) + 200]
                 ids = re.findall(r'"([0-9a-f]{32,64})"', window)
+                if not ids:
+                    ids = re.findall(r"'([0-9a-f]{32,64})'", window)
                 if ids:
                     action_id = ids[-1]
                     setattr(self.state, attr, action_id)
@@ -5573,29 +5662,31 @@ class PayPalFlow:
             return changed
 
         def complete() -> bool:
-            return self._modxo_named_action_ids_complete()
+            # Stop chunk download once Brazil-core pair is present; extras are best-effort.
+            return self._modxo_core_action_ids_complete()
 
         if force_refresh:
             self._clear_static_modxo_action_ids_for_refresh()
-        else:
-            self._apply_static_modxo_action_ids()
-            if complete():
-                return
 
         scan(html or "")
         if complete():
+            # Optional static fill only for missing *extra* ids when enabled.
+            if self._modxo_static_action_ids_enabled():
+                self._apply_static_modxo_action_ids()
             return
 
         script_urls = []
         for src in re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html or "", re.I):
-            if "/pay/_next/static/chunks/" not in src:
+            if "/pay/_next/static/chunks/" not in src and "/_next/static/chunks/" not in src:
                 continue
             url = urllib.parse.urljoin(base_url, src)
             if url not in script_urls:
                 script_urls.append(url)
 
-        script_urls = script_urls[:80]
+        script_urls = script_urls[:120]
         if not script_urls:
+            # Last resort: static capture values if operator opted in.
+            self._apply_static_modxo_action_ids()
             return
 
         concurrency = self._env_int_between(
@@ -5681,6 +5772,40 @@ class PayPalFlow:
             time.monotonic() - started,
             bool(complete()),
         )
+
+        if not complete():
+            # After live scan: opt-in static, or emergency fill when core pair
+            # is still empty (real BA pages usually scan OK; empty pair makes
+            # Phase 2 fail before any PayPal response can be judged).
+            if self._modxo_static_action_ids_enabled():
+                self._apply_static_modxo_action_ids()
+            elif not (
+                self.state.show_create_account_action_id
+                or self.state.create_user_action_id
+                or self.state.submit_public_credential_action_id
+            ):
+                logger.warning(
+                    "ModXO live scan found no action ids; applying emergency "
+                    "static capture values so Phase 2 can still attempt server actions. "
+                    "Prefer fixing chunk scan or set PAYPAL_MODXO_STATIC_ACTION_IDS=1."
+                )
+                # Temporarily force apply without flipping the env default.
+                for attr, action_id in _MODXO_STATIC_ACTION_IDS.items():
+                    if getattr(self.state, attr, ""):
+                        continue
+                    setattr(self.state, attr, action_id)
+                    logger.info("ModXO action {}: {} (emergency-static)", attr, action_id)
+            if complete():
+                logger.info("ModXO core action ids available after fallback fill")
+            else:
+                logger.warning(
+                    "ModXO core action ids still incomplete after HTML/JS scan "
+                    "(show_create={} create_user={} submit_public={}). "
+                    "Phase 2 may fail without live action ids or a real BA token.",
+                    bool(self.state.show_create_account_action_id),
+                    bool(self.state.create_user_action_id),
+                    bool(self.state.submit_public_credential_action_id),
+                )
 
     def _card_issuer_type(self) -> str:
         """PayPal GraphQL CardIssuerType enum."""
@@ -7475,7 +7600,13 @@ class PayPalFlow:
                     ("_1_login_password", (None, "")),
                     (
                         "_1_login_phone_country_code",
-                        (None, self.state.login_phone_country_code or self.user.phone_country_code or "+55"),
+                        (
+                            None,
+                            self.state.login_phone_country_code
+                            or self.user.phone_country_code
+                            or getattr(self.protocol, "phone_cc", "")
+                            or "+66",
+                        ),
                     ),
                     ("_1_formName", (None, "email")),
                     ("0", (None, '["$K1"]')),

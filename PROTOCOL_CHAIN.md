@@ -17,16 +17,18 @@ UI country=TH
 
 ```text
 main.py / web.py
-  → generate_user/card/address (TH pools)
+  → generate_user/card/address (country pools)
   → PayPalFlow.run()
       Phase0: GET /agreements/approve?ba_token=BA-...
               follow redirects, extract ssrt / cookies / DataDome 判定
-      Phase1: FraudNet fn_sync + Tealeaf + analytics (tz +420)
+              ModXO Next-Action ids: live HTML/JS scan first (static opt-in)
+      Phase1: FraudNet fingerprint + Tealeaf + analytics on /pay
+              (Brazil public order; must run before ModXO create-account)
       Phase2: ModXO Server Action create-account → EC token / signup URL
-      Phase3: GriffinMetadata(TH/th)
-              InitiateRiskBasedTwoFactorPhoneConfirmation (+66)
+      Phase3: GriffinMetadata(country/lang)
+              InitiateRiskBasedTwoFactorPhoneConfirmation
               ConfirmRiskBasedTwoFactorPhoneConfirmation (OTP)
-              SignUpNewMemberMutation (country=TH, identityDocument=null)
+              SignUpNewMemberMutation
       Phase4: AuthorizeBillingAgreement → return_url / BA id
 ```
 

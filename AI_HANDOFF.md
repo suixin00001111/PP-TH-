@@ -17,6 +17,8 @@ Read this **before** changing flow, proxy, session, or web job ownership. Do not
 | What it is **not** | Not a clone of `pay.153.ink` / private pay153 deploy; not a remote job platform client |
 | Product line | **A-layer BA** Phase 0–4; optional B/C merchant chain (default **off** in Web) |
 | Default runtime | Pure protocol: `fingerprint=random`, `datadome=protocol`, `mtr=python_generated` |
+| Phase order | **0 → 1 (risk beacons) → 2 → 3 → 4** (aligned with Brazil public package) |
+| ModXO action ids | **Dynamic-first** (`PAYPAL_MODXO_STATIC_ACTION_IDS=0`); static capture only as opt-in fallback |
 | Entry points | `web.py` (HTTP UI/API), `main.py` (CLI), `start.bat` / `start.sh` |
 | Core engine | `paypal/flow.py` → `PayPalFlow` (very large; TH-shaped multi-country protocol) |
 | Success criteria (local) | Install deps → Web up → `/api/health` → create job → Phase 0 page load → Phase 2 actions against PayPal |
@@ -57,12 +59,18 @@ web.py / main.py
   ├─ resolve_outbound_proxy()      # filled → optional system → direct
   └─ PayPalFlow.run()
         Phase0  GET agreements/approve?ba_token=…  (cookies, DataDome edge, ModXO action ids)
-        Phase1  fingerprint / Tealeaf / analytics (country tz)
+        Phase1  fingerprint + Tealeaf + analytics on /pay (Brazil public order; was missing)
         Phase2  ModXO server actions → EC token / signup
         Phase3  OTP (Griffin / 2FA phone confirm)
         Phase4  AuthorizeBillingAgreement → return_url / BA id
         [optional] merchant B/C if CONTINUE_MERCHANT
 ```
+
+**Brazil public reference tree** (local peer, not a dependency):
+`E:\桌面\巴西paypal协议 (1)\paypal-pay-public-nocdk` — smaller BR-only package.
+Useful borrow points already applied: Phase1 before Phase2, dynamic ModXO ids default,
+`trust_env=False`, proxy pool toggle, compact Web OTP UX. Do **not** copy BR-only CPF
+or hard-coded `X-Country: BR` into multi-country paths.
 
 ### Important modules
 
