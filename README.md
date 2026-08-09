@@ -10,6 +10,7 @@
 | 文档 | 用途 |
 |------|------|
 | **[AI_HANDOFF.md](./AI_HANDOFF.md)** | 给后续 AI / 协作者的完整交接（必读） |
+| [DEPLOY.md](./DEPLOY.md) | **VPS 部署**（systemd / 用户自填代理） |
 | [PROTOCOL_CHAIN.md](./PROTOCOL_CHAIN.md) | Phase 0–4 协议链路 |
 | [PROXY.md](./PROXY.md) | 代理 / TUN / cliproxy |
 | [SETUP.md](./SETUP.md) | 安装与启动细节 |
@@ -115,6 +116,17 @@ Windows（推荐）：
 ```
 
 打开：http://127.0.0.1:8080
+
+### 服务器一键部署
+
+用户在网页 **自行填写代理**（服务器不预置代理池）。详见 **[DEPLOY.md](./DEPLOY.md)**。
+
+```bash
+# 在 VPS root 终端执行
+curl -fsSL https://raw.githubusercontent.com/suixin00001111/PP-TH-/main/deploy/install.sh -o /tmp/pp-th-install.sh
+bash /tmp/pp-th-install.sh
+# 访问 http://<公网IP>:8080/
+```
 
 核心依赖：`curl_cffi`、`httpx[http2]`、`loguru`、`requests`、`faker`、`unidecode`、`certifi`。
 
