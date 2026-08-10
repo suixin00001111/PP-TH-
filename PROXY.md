@@ -1,13 +1,18 @@
-# 代理说明（PP Multi）
+# 代理说明（PP Multi / PP-TH-）
 
-本文说明当前代码的**出网解析逻辑**、与巴西项目的差异、常见故障（cliproxy / TUN / 系统代理）。
+更新：2026-08-10  
+
+本文说明当前代码的**出网解析逻辑**、与常见住宅代理（cliproxy 等）/ TUN / 系统代理的关系。  
+业务侧国家与升权/地址见 [README.md](./README.md)；本文只讲**出口**。
 
 ## 1. 设计目标
 
 1. **优先使用你在 Web 填写的代理**（主机 / 端口 / 账号 / 密码不变）。
 2. **不依赖 TUN 才能识别填写的代理**：对住宅节点自动尝试 `socks5h` / `socks5` / `http`。
-3. **对齐巴西日常用法**：若 Windows「系统代理」已开（如 Clash `127.0.0.1:7897`），在填写代理不可用时自动回退本地客户端出口。
-4. **明确失败原因**：cliproxy `forbidden ip=x.x.x.x not supported` 会直接中文提示，而不是只报 curl 97/28。
+3. 若 Windows「系统代理」已开（如 Clash `127.0.0.1:7897`），在**填写代理不可用且允许回退**时可走本地客户端出口。
+4. **未填代理且未强制 require_proxy** → **直连**，不要因为半残 7897 导致整任务起不来。
+5. **明确失败原因**：cliproxy `forbidden ip=x.x.x.x not supported` 会中文提示，而不是只报 curl 97/28。
+6. 探测与会话使用 `ssl_env` 镜像 CA，减少 Windows 中文路径 **curl 77**。
 
 ## 2. 支持的填写格式
 
@@ -26,11 +31,16 @@ host:port
 
 ## 3. 解析顺序（`paypal/proxy.py` → `resolve_outbound_proxy`）
 
+以代码为准（摘要）：
+
 | 顺序 | 条件 | 行为 |
 |------|------|------|
-| 1 | Windows 系统代理开启 | 先探测本机客户端（如 `127.0.0.1:7897`） |
-| 2 | Web/CLI 填写了代理 | 对**同一 host/user/pass** 尝试 `socks5h` → `socks5` → `http` → `https` |
-| 3 | 填写失败 | 再回退系统代理（若本地端口可用） |
+| 1 | Web/CLI **填写了**代理 | 对**同一 host/user/pass** 尝试 `socks5h` → `socks5` → `http` → `https` |
+| 2 | 填写失败或未填，且允许系统回退 | 探测本机客户端（如 `127.0.0.1:7897`） |
+| 3 | `require_proxy=False` 仍无可用出口 | **`direct`**，任务继续走机器默认路由 |
+| 4 | `require_proxy=True`（用户填了代理却全失败） | 抛出可操作的中文错误 |
+
+`require_proxy` 在 Web 任务线程中大致为：`bool(填写的代理原文)`（空表单 + 关代理不得因 7897 挂死）。
 
 成功后任务日志会出现类似：
 
@@ -129,4 +139,10 @@ Chromium **不支持带用户名密码的 SOCKS5**。
 
 - `.env`、真实代理账号、API Key **禁止提交**
 - 日志中密码打码为 `***`
-- 见 `SANITIZATION.md`
+- 见 [SANITIZATION.md](./SANITIZATION.md)
+
+## 11. 与其它文档
+
+- 安装与故障表：[SETUP.md](./SETUP.md)
+- 服务器部署（用户自填代理）：[DEPLOY.md](./DEPLOY.md)
+- 协议阶段与升权：[PROTOCOL_CHAIN.md](./PROTOCOL_CHAIN.md)

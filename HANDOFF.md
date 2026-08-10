@@ -11,8 +11,9 @@
 
 - 仓库：`https://github.com/suixin00001111/PP-TH-`
 - 技术栈：Python 3.10+（生产环境 3.11）、httpx/curl_cffi、loguru、Playwright（可选）、自建 Web UI（标准库 http.server）
-- 支持国家：**40+**，`GET /api/regions` 返回国家目录
+- 支持国家：**44**（`GET /api/regions` / `list_regions_public()`）
 - 核心设计：**"多国协议绑定"**——选中国家后绑定该国的 `ProtocolContext`（locale/区号/证件/地址样式/语言），生成的姓名/城市/街道/邮编/手机区号**必须对应所选国家**
+- 现行能力：**elevate_bind 升权**、**OSM 在线地址**、**44 国 ADDRESS_POOLS**；Web 风控三项**可选**（非锁死只读）
 
 ### 核心概念（务必分清）
 
@@ -308,25 +309,27 @@ python -m compileall -q paypal web.py main.py config.py
 ## 11. 工作约定（用户偏好，请遵守）
 
 1. **行为对齐母版**：修改风控/重试/流程逻辑前，先对照母版 `openai-paypal` 的行为；"增强"需用户拍板
-2. **多国化不可破坏**：任何改动不能破坏 40+ 国家资料生成的一致性
-3. **改代码必须配套测试**：测试套件需保持全绿（61 用例）
-4. **CLI/Web/前端参数要同步**：新增模式时同步 flow.py + web.py + index.html/app.js（曾因不同步出 bug）
-5. **Web UI 修复注意**：`app.js` 静态资源已加 `?v=2` 版本号防缓存；改前端后记得递增版本号
+2. **多国化不可破坏**：任何改动不能破坏 **44 国**资料与 `ADDRESS_POOLS` 一致性
+3. **改代码必须配套测试**：`PAYPAL_ONLINE_ADDRESS=0 python -m unittest discover -s tests`
+4. **CLI/Web/前端参数要同步**：新增模式时同步 `flow.py` + `web.py` + `index.html`/`app.js`（含 buyer 别名）
+5. **Web UI 缓存**：静态资源若带 `?v=`，改前端后递增版本号
 6. 交互操作：任务等待验证码时走 `wait_for_input`/Web UI 输入，勿在服务器用 stdin
 7. 服务器凭据与代理信息属于敏感信息，交接/文档中不要写明文
+8. **文档与代码同步**：勿再写「Web 强制锁定巴西纯协议三项、无 Headless 下拉」——当前 UI **可选**；服务器 `.env` 仅**默认**纯协议（见 `DEPLOY.md` / `AI_HANDOFF.md`）
 
 ---
 
 ## 12. 2026-08-10 变更摘要（同步仓库）
 
-| 提交主题 | 内容 |
-|----------|------|
+| 主题 | 内容 |
+|------|------|
 | Identity elevation | `elevation_flow.py`、GraphQL BUYER_*、`session.set_euat_token`、Web 选流 |
-| Online address | `online_address.py`、`.env` `PAYPAL_ONLINE_ADDRESS`、`generate_address` 路由 |
+| Online address | `online_address.py`、`PAYPAL_ONLINE_ADDRESS`、`generate_address` 路由 |
 | Address pools | `country_profiles.ADDRESS_POOLS` 补齐 44 国 + ASCII/邮编修正 |
+| 文档纠偏 | 全量 md 与现行 Web（可选风控 + 升权 + 44 国）对齐；废弃「仅巴西锁定」表述 |
 
-用户文档入口：`README.md` · `SETUP.md` · `PROTOCOL_CHAIN.md` · `PROXY.md` · `DEPLOY.md`。
+用户文档入口：`README.md` · `SETUP.md` · `PROTOCOL_CHAIN.md` · `PROXY.md` · `DEPLOY.md` · `AI_HANDOFF.md`。
 
 ---
 
-*交接更新：2026-08-10（升权/地址）。服务器 §7 以 2026-08-07 部署为准。有疑问可查看 `REVERSE_NOTES.md` 与 `PROTOCOL_CHAIN.md`。*
+*交接更新：2026-08-10（升权/地址/文档纠偏）。服务器 §7 手工 CentOS 笔记仍有效；一键部署以 `DEPLOY.md` + `install.sh` 为准。*

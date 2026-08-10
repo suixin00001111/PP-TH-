@@ -1,5 +1,7 @@
 # 环境安装与启动
 
+> 更新：2026-08-10 · 与当前 `main` 代码一致
+
 ## 1. 基础依赖
 
 ```powershell
@@ -7,14 +9,19 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-`requirements.txt` 含 `curl_cffi`（会话必需）、`httpx`、`faker` 等。
+`requirements.txt`：`curl_cffi`（会话首选）、`httpx`、`faker`、`unidecode`、`loguru` 等。
 
-## 2. Headless（Web 默认推荐）
+## 2. Headless（可选，非必须）
+
+仅当你要在 Web/CLI 里选 **Headless** 风控引擎时需要：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-headless.txt
 .\.venv\Scripts\python.exe -m playwright install chromium
 ```
+
+纯协议路径（`random` + `protocol` + `python_generated`）**不需要** Playwright。  
+CentOS 7 等老系统若装 headless，见 [HANDOFF.md](./HANDOFF.md) §7（常需固定 `playwright==1.30.0`）。
 
 ## 3. 配置
 
@@ -22,21 +29,22 @@ python -m venv .venv
 copy .env.example .env
 ```
 
-常用变量（勿提交真实密钥）：
-
 | 变量 | 含义 |
 |------|------|
 | `PAYPAL_PROXY_URL` / `PAYPAL_PROXY_POOL` | 默认代理（Web 填写优先） |
+| `PAYPAL_USE_SYSTEM_PROXY` | `1` 时允许回退本机 Clash 等 |
 | `PAYPAL_ROXY_API_KEY` / HOST / PORT | Roxy Local API |
-| `SMSBOWER_API_KEY` | 自动接码（可选） |
-| `PAYPAL_FINGERPRINT_SOURCE` 等 | 细粒度运行时覆盖 |
-| `PAYPAL_ONLINE_ADDRESS` | `1`（默认）在线 OSM 地址；`0` 仅本地 `ADDRESS_POOLS` |
+| `SMSBOWER_API_KEY` 等 | 自动接码（可选） |
+| `PAYPAL_FINGERPRINT_SOURCE` | `random` / `headless` / `roxy` / … |
+| `PAYPAL_DATADOME_MODE` | `protocol` / `headless` / `roxy` / … |
+| `PAYPAL_MTR_RUNTIME` | `python_generated` / `headless` / `roxy` / … |
 | `PAYPAL_RUNTIME_MODE` | `protocol` / `headless` / `auto` / `roxy` |
-| `PAYPAL_CONTINUE_MERCHANT` | `1` 开启 A 成功后 B/C 商户链（默认 `0`） |
+| `PAYPAL_ONLINE_ADDRESS` | `1`（默认）OSM 在线地址；`0` 仅本地池 |
+| `PAYPAL_CONTINUE_MERCHANT` | `1` 开启 A 后 B/C（默认 `0`） |
+| `PAYPAL_WEB_*` | 任务上限、OTP 超时、生产模式等 |
 
-**优先级**：Web/CLI 字段 > 环境变量 > `config.py`
-
-完整模板见 `.env.example`。
+**优先级**：Web/CLI 字段 > 环境变量 > `config.py`  
+完整模板：`.env.example`。
 
 ## 4. 启动 Web
 
@@ -48,34 +56,38 @@ copy .env.example .env
 
 打开：http://127.0.0.1:8080
 
-### Web 默认（当前）
+### Web 表单当前能力
 
-- 指纹 / DataDome / MTR：表单可选；纯协议常用 `random` + `protocol` + `python_generated`
-- 买家身份：`legacy` 或 **`elevate_bind`（注册后升 Guest、绑 EC 再授权）**
-- 业务：**实跑 A 层**（Merchant B/C 默认关）
-- 国家：可搜索中文下拉（44 国）
-- 地址：默认尝试 OSM 在线，失败回落本地池
-- 代理：填写 +「测试代理」；任务头显示解析后的 proxy_label
+- **国家**：44 国可搜索下拉
+- **Buyer 身份**：`原版流程` / `注册后升 Guest、绑 EC 再授权`（`elevate_bind`）
+- **指纹 / DataDome / MTR**：可选 Headless、纯协议或 Roxy（**不是**锁死只读）
+- **代理**：填写 +「测试代理」
+- **地址**：任务内自动 `OSM → ADDRESS_POOLS`
+- **OTP**：面板交互；可选 SMSBower
 
-### 常用 API
+### API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/regions` | 国家列表 |
-| GET | `/api/runtime` | 默认运行时 + `buyer_identity_modes` |
-| POST | `/api/proxy/test` | 测试代理 |
-| POST | `/api/jobs` | 创建任务（含 `buyer_identity_mode`） |
-| GET | `/api/jobs/{id}` | 任务详情与日志 |
-| POST | `/api/jobs/{id}/otp` | 提交 OTP / 换号 |
+| GET | `/api/runtime` | 推荐默认 + 枚举（含 buyer 模式） |
+| POST | `/api/proxy/test` | 测代理 |
+| POST | `/api/jobs` | 建任务（`buyer_identity_mode` 等） |
+| GET | `/api/jobs/{id}` | 详情与日志 |
+| POST | `/api/jobs/{id}/otp` | OTP / 换号 |
 
-创建任务时 **手机国际区号必须与 `country` 一致**，否则 400。
+建任务时 **手机国际区号必须与 `country` 一致**，否则 400。  
+任务列表按 Cookie `paypal_web_device_id` 隔离。
 
 ## 5. CLI 示例
 
 ```powershell
-.\.venv\Scripts\python.exe main.py --country NL --ba-token BA-xxx --phone +316... --proxy-url "socks5h://user:pass@host:port"
+# 纯协议 + 升权
 .\.venv\Scripts\python.exe main.py --country BR --ba-token BA-xxx --phone +5511... --buyer-mode elevate_bind --runtime protocol
+
+# 带代理
+.\.venv\Scripts\python.exe main.py --country NL --ba-token BA-xxx --phone +316... --proxy-url "socks5h://user:pass@host:port"
 ```
 
 ## 6. 代理详解
@@ -84,36 +96,31 @@ copy .env.example .env
 
 ## 7. Roxy（可选）
 
-1. 本机启动 RoxyBrowser Local API
-2. Web Roxy 面板填 API Key，或设环境变量
-3. 指纹/DataDome/MTR 选 roxy 或 auto
-4. 创建窗口可绑定应用层代理；未填则显示「本机网络」
+1. 本机启动 RoxyBrowser Local API  
+2. Web 面板或环境变量填 API Key  
+3. 指纹/DataDome/MTR 选 `roxy`  
+4. 未填代理时窗口走本机网络
 
 ## 8. 测试
 
 ```powershell
-# 标准库 unittest（推荐，与 CI/服务器一致）
 $env:PAYPAL_ONLINE_ADDRESS = "0"
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-
-# 或 pytest
-.\.venv\Scripts\python.exe -m pip install pytest
-.\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
 ## 9. 故障速查
 
 | 现象 | 处理 |
 |------|------|
-| `WebJob() takes no arguments` | 确认 `WebJob` 带 `@dataclass` |
-| `playwright is not installed` | 见上文 Headless 安装 |
-| SOCKS5 认证与 Chromium | 见 PROXY.md 本地 HTTP 桥 |
-| `forbidden ip not supported` | 白名单或开 TUN / 系统代理路径 |
-| `curl 97` | 多为上游 HTTP 403，见 PROXY.md |
-| `AWAITING_OTP` 发码失败 | 换号；代理通仍可能风控拒发 |
-| 创建任务 400（phone/country） | 用该国区号，如 BR 用 `+55…`，勿混用 TH 号 |
-| OSM 地址超时拖慢任务 | `PAYPAL_ONLINE_ADDRESS=0` 或修好外网访问 |
-| 假 BA Phase2 无 EC | 预期失败，非卡死；换真实 BA 再测全链路 |
-| `elevate_bind` 未走到升权 | 确认传了 `buyer_identity_mode`，日志含 Buyer identity mode |
+| `playwright is not installed` | 装 headless 依赖，或表单改纯协议三项 |
+| SOCKS5 认证 + Chromium | [PROXY.md](./PROXY.md) 本地 HTTP 桥 |
+| `forbidden ip not supported` | 白名单 / TUN / 系统代理 |
+| `curl 97` | 上游 HTTP 403，见 PROXY |
+| `curl 77`（Windows） | 确认 `ssl_env` CA 镜像到 ASCII 路径 |
+| 创建任务 400 phone/country | 区号与国家一致（BR=`+55`，勿混 `+66`） |
+| OSM 拖慢 | `PAYPAL_ONLINE_ADDRESS=0` |
+| 假 BA Phase2 无 EC | 预期失败；换真实 BA |
+| 任务列表空 / 详情 404 | 带上 device cookie；勿裸 curl 查他人任务 |
+| 升权未生效 | `buyer_identity_mode=elevate_bind`，日志含 elevate / Buyer |
 
-协议链路见 `PROTOCOL_CHAIN.md`、`README.md`；架构交接见 `HANDOFF.md`。
+协议链路：[PROTOCOL_CHAIN.md](./PROTOCOL_CHAIN.md) · 总览：[README.md](./README.md) · 交接：[HANDOFF.md](./HANDOFF.md)
