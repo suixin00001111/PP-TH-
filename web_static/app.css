@@ -1077,36 +1077,6 @@ select#countrySelect {
   margin-bottom: 0;
 }
 
-/* Brazil pure-protocol fixed knobs (no select dropdowns) */
-.runtime-fixed {
-  margin: 0.35rem 0 0.75rem;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
-}
-.runtime-fixed .section-title.compact {
-  margin: 0 0 0.35rem;
-}
-.runtime-fixed .section-title.compact h3 {
-  margin: 0;
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-.runtime-fixed-list {
-  margin: 0 0 0.35rem;
-  padding-left: 1.1rem;
-  font-size: 0.78rem;
-  line-height: 1.55;
-  color: var(--text, #e8eaf0);
-}
-.runtime-fixed-list li {
-  margin: 0.1rem 0;
-}
-.runtime-fixed .field-hint {
-  margin: 0.25rem 0 0;
-}
-
 
 .section-title > div:first-child {
   flex: 1 1 auto;

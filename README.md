@@ -3,44 +3,9 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-private-lightgrey)](#)
 
-本地可运行的 **多国 PayPal Billing Agreement** 实现：以纯 HTTP 状态机为主，可选本地 Headless / Roxy 风控辅助；**不依赖**远端 job 平台。
+本地可运行的 **多国 PayPal Billing Agreement** 实现：以纯 HTTP 状态机为主，Web 默认可叠加本地 Headless（Playwright）风控辅助；不依赖远端 job 平台。
 
 仓库：https://github.com/suixin00001111/PP-TH-
-
-| 文档 | 用途 |
-|------|------|
-| **[AI_HANDOFF.md](./AI_HANDOFF.md)** | 给后续 AI / 协作者的完整交接（必读） |
-| [DEPLOY.md](./DEPLOY.md) | **VPS 部署**（systemd / 用户自填代理） |
-| [PROTOCOL_CHAIN.md](./PROTOCOL_CHAIN.md) | Phase 0–4 协议链路 |
-| [PROXY.md](./PROXY.md) | 代理 / TUN / cliproxy |
-| [SETUP.md](./SETUP.md) | 安装与启动细节 |
-| [SANITIZATION.md](./SANITIZATION.md) | 脱敏与密钥策略 |
-
----
-
-## 当前默认（2026-08-10）
-
-| 项 | 默认 |
-|----|------|
-| 运行时 | **protocol**（纯 HTTP） |
-| 指纹 / DataDome / MTR | **Web 固定** `random` / `protocol` / `python_generated`（巴西纯协议；页面无 Headless/Roxy 下拉） |
-| 阶段顺序 | **Phase0 → Phase1（风控信标）→ Phase2 → Phase3 → Phase4**（对齐巴西公开包） |
-| ModXO action id | **优先从 HTML/JS 动态提取**；`PAYPAL_MODXO_STATIC_ACTION_IDS=0` |
-| 代理 | **只有填了代理 URL 才硬要求探测成功**；未填可直连；半坏 Clash 7897 不再误报 forbidden IP |
-| Web A 层 | 仅 BA；Merchant B/C 默认关 |
-| Windows 中文路径 | `paypal/ssl_env.py` 镜像 CA；**代理探测**也走同一 CA，避免 curl 77 |
-
-假 BA（如 `BA-ABCDEFGH12345678`）用于冒烟：应看到 Phase0 页面 200、Phase1 信标、Phase2 打到 PayPal，然后因 **INVALID_TOKEN / 无 EC / authchallenge** 失败——这是 **预期**，不是“项目起不来”。
-
-**完整成功（OTP / 授权）需要**：真实未过期 BA + 目标国住宅代理（或可用 TUN）+ 手机号 / OTP。
-
-### 最近修订（摘要）
-
-| 主题 | 说明 |
-|------|------|
-| 风控三项简化 | Web 锁定巴西纯协议三件套；`create_job` 忽略客户端 headless/roxy |
-| 代理失败可诊断 | curl 35/77 优先识别；保留 `resolve_outbound_proxy` 中文原文；半开 Clash 提示「关代理直连 / 开 TUN / 测住宅」 |
-| 冒烟路径 | 关代理 + 假 BA → Phase0/1/2 → `INVALID_TOKEN` 即引擎可跑 |
 
 ---
 
@@ -48,18 +13,14 @@
 
 | 概念 | 含义 |
 |------|------|
-| **泰国 TH** | **流程参考**：状态机以泰国实现为蓝本 |
-| **各国协议** | 选中国家后绑定该国 `ProtocolContext`（locale / 区号 / 证件 / 地址） |
-| **生成资料** | 姓名 / 城市 / 街道 / 邮编 / 手机区号 **必须对应该国** |
-| **巴西公开包** | 本地对照实现（Phase 顺序 / 动态 ModXO）；**不是**本仓库依赖，也不是 pay.153 源码 |
+| **泰国 TH** | **流程参考**：Phase 0–4 状态机以泰国实现为蓝本 |
+| **各国协议** | 选中国家后绑定该国 `ProtocolContext`（locale / 区号 / 证件 / 地址样式等） |
+| **生成资料** | 姓名 / 城市 / 街道 / 邮编 / 手机区号 **必须对应该国**，不会把泰国资料填进其它国家 |
 
 任务启动日志示例：
 
 ```text
 Protocol context: JP (日本) lang=ja locale=ja_JP phone_cc=+81
---- Phase 0: Initial page load ---
---- Phase 1: Risk control signals ---
---- Phase 2: Create account flow ---
 ```
 
 ---
@@ -70,24 +31,24 @@ Web 下拉与 `GET /api/regions` 一致，包括：
 
 `TH JP US GB BR MX ID MY SG PH VN KR HK TW CN AU NZ CA DE FR ES IT NL SE PL PT IE CH AT BE DK NO FI IN AE SA IL TR RU ZA AR CL CO PE`
 
-各国差异：语言/locale、国际区号、分析时区、地址样式；**仅巴西 BR** 生成并提交 **CPF**，其余不强制证件。
+各国差异：语言/locale、国际区号、分析时区 g=、地址样式；**仅巴西 BR** 生成并提交 **CPF**，其余不强制证件。
 
 ---
 
-## 资料生成
+## 资料生成（开源对接）
 
-- [Faker](https://github.com/joke2k/faker) 按国家 locale 生成姓名/城市/街道
-- [Unidecode](https://pypi.org/project/Unidecode/) 转写非拉丁脚本
+- 姓名、城市、街道等通过开源库 [Faker](https://github.com/joke2k/faker)（MIT）按国家 locale 生成（如 `th_TH`、`ja_JP`、`pt_BR`、`de_DE`）
+- 非拉丁脚本经 [Unidecode](https://pypi.org/project/Unidecode/) 转写，便于表单字段
 - `address.country` 与所选协议国家强制一致
-- 手机号输入框 placeholder 仅为示例
+- 手机号输入框 **placeholder 仅为示例**；用户填写后显示完整号码
 
 ---
 
 ## 功能概览
 
-**A 层（PayPal BA）**：Phase0 协议页 → Phase1 指纹/Tealeaf/analytics → Phase2 ModXO/EC → Phase3 OTP → Phase4 授权
+**A 层（PayPal BA）**：Phase0 协议页 → Phase1 指纹/Tealeaf → Phase2 ModXO/EC → Phase3 OTP → Phase4 授权
 
-**B/C 层**（可选，默认关）：pm-redirects / SetupIntent / checkout-verify
+**B/C 层**：pm-redirects / pay.openai → SetupIntent → checkout/verify
 
 **控制台**：国家下拉、代理填写与测试、OTP 交互、任务日志、CLI
 
@@ -101,44 +62,26 @@ cd PP-TH-
 python -m venv .venv
 ```
 
-Windows（推荐）：
-
-```powershell
-.\start.bat
-# 自动：venv / pip / .env.example→.env / SSL CA 预检 / web 8080
-```
-
-或手动：
+Windows:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe web.py --host 127.0.0.1 --port 8080
+.\start.bat
+# 或 .\.venv\Scripts\python.exe web.py --host 127.0.0.1 --port 8080
 ```
 
 打开：http://127.0.0.1:8080
 
-### 服务器一键部署
-
-用户在网页 **自行填写代理**（服务器不预置代理池）。详见 **[DEPLOY.md](./DEPLOY.md)**。
-
-```bash
-# 在 VPS root 终端执行
-curl -fsSL https://raw.githubusercontent.com/suixin00001111/PP-TH-/main/deploy/install.sh -o /tmp/pp-th-install.sh
-bash /tmp/pp-th-install.sh
-# 访问 http://<公网IP>:8080/
-```
-
-核心依赖：`curl_cffi`、`httpx[http2]`、`loguru`、`requests`、`faker`、`unidecode`、`certifi`。
+依赖：`httpx[http2]`、`loguru`、`requests`、`faker`、`unidecode`。
 
 ### 代理（重要）
 
 推荐在 **Web 填写** 并先点「测试代理」。
 
 - 支持 `http://` / `socks5://` / `socks5h://` 以及 `host:port:user:pass`
-- 住宅节点常会自动升为 **`socks5h`**
-- **未开代理**时走直连，不因本机 Clash 半开而硬失败
-- 可选：`PAYPAL_USE_SYSTEM_PROXY=1` 才主动用系统/本地客户端代理
-- cliproxy `forbidden ip` / TUN：**详见 [PROXY.md](./PROXY.md)**
+- 住宅节点常会自动升为 **`socks5h`**（账号主机不变），见任务头 `(auto socks5h from ...)`
+- 系统代理（Clash `127.0.0.1:789x`）可在填写代理失败时回退
+- cliproxy `forbidden ip` / 关 TUN 问题：**详见 [PROXY.md](./PROXY.md)**
 
 不要把真实代理账号提交到 Git。也可用 `PAYPAL_PROXY_URL` / `PAYPAL_PROXY_POOL`。
 
@@ -150,8 +93,8 @@ bash /tmp/pp-th-install.sh
 
 | 参数 | 说明 |
 |------|------|
-| `--ba-token` | BA token（必填，格式 `BA-` + 8–80 位字母数字） |
-| `--phone` | 带国际区号手机号（必填；SMSBower 开启时可留空） |
+| `--ba-token` | BA token（必填） |
+| `--phone` | 带国际区号手机号（必填） |
 | `--country` | 协议国家，默认 `TH` |
 | `--proxy` / `--no-proxy` | 开/关代理 |
 | `--debug` | 调试日志 |
@@ -165,13 +108,11 @@ bash /tmp/pp-th-install.sh
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/regions` | 国家列表 |
-| GET | `/api/runtime` | 默认运行时 knobs |
-| GET | `/api/jobs` | 任务列表（按 device cookie） |
+| GET | `/api/jobs` | 任务列表 |
 | POST | `/api/jobs` | 创建任务 |
-| GET | `/api/jobs/{id}` | 任务详情 + 日志 |
+| GET | `/api/jobs/{id}` | 任务详情 |
 | POST | `/api/jobs/{id}/otp` | 提交 OTP |
 | POST | `/api/proxy/test` | 测试代理 |
-| POST | `/api/roxy/test` | 测试 Roxy Local API |
 
 创建任务示例：
 
@@ -182,15 +123,9 @@ bash /tmp/pp-th-install.sh
   "country": "JP",
   "proxy_enabled": true,
   "proxy": "host:port:username:password",
-  "runtime_mode": "protocol",
-  "fingerprint_source": "random",
-  "datadome_mode": "protocol",
-  "mtr_runtime": "python_generated",
   "max_card_attempts": 5
 }
 ```
-
-任务归属依赖 Cookie **`paypal_web_device_id`**（首页与 JSON API 会下发）。裸 HTTP 客户端请带 cookie jar。
 
 ---
 
@@ -199,19 +134,20 @@ bash /tmp/pp-th-install.sh
 ```text
 PP-TH-/
 ├── config.py / main.py / web.py / start.bat / start.sh
-├── .env.example                 # 复制为 .env（勿提交 .env）
 ├── requirements.txt
 ├── paypal/
-│   ├── flow.py                  # BA 状态机 Phase0–4
-│   ├── ssl_env.py               # Windows 非 ASCII 路径 CA 镜像
-│   ├── protocol.py / regions.py / oaipy_data.py
-│   ├── session.py / proxy.py    # curl_cffi + 代理解析
-│   ├── fingerprint.py / tealeaf.py / analytics.py / graphql.py
-│   ├── local_headless.py / roxy_fingerprint.py / smsbower.py
+│   ├── flow.py          # 状态机 + 各国 ProtocolContext
+│   ├── protocol.py      # 国家协议上下文（TH 为参考衍生）
+│   ├── regions.py       # 国家档案
+│   ├── oaipy_data.py    # Faker 多国资料
+│   ├── session.py / proxy.py / proxy_bridge.py
+│   ├── fingerprint.py / local_headless.py / tealeaf.py
+│   ├── analytics.py / graphql.py / mtr.py
 │   └── merchant_complete.py / b_layer_handoff.py
-├── web_static/                  # 控制台 UI
+├── web_static/
 ├── tests/
-├── AI_HANDOFF.md / PROTOCOL_CHAIN.md / PROXY.md / SETUP.md
+├── PROXY.md / SETUP.md / PROTOCOL_CHAIN.md
+├── REVERSE_NOTES.md / SANITIZATION.md
 └── README.md
 ```
 
@@ -228,86 +164,65 @@ socks5://user:pass@host:port
 socks5h://user:pass@host:port
 ```
 
-不要写 `http://host:port:user:pass`。完整行为见 **[PROXY.md](./PROXY.md)**。
+不要写 `http://host:port:user:pass`。完整行为（自动 scheme、系统代理回退、TUN/白名单）见 **[PROXY.md](./PROXY.md)**。
 
 ---
 
 ## 测试
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests -q
-# 或
-.\.venv\Scripts\python.exe -m unittest discover -s tests -q
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-冒烟期望：
-
-| 输入 | 期望 |
-|------|------|
-| 假 BA + 无代理 | Phase0 200 → Phase1 信标 → Phase2 打到 PayPal → 失败（INVALID_TOKEN / 无 EC / authchallenge） |
-| 真 BA + 住宅代理 + 手机 | 可能进 Phase3 OTP，Web 输入验证码 |
+- 假 BA：Phase 0/1 通常可过；Phase 2 预期因无 EC 失败
+- 完整 OTP 需真实 BA + 该国号码（建议该国出口代理）
 
 ---
 
 ## 常见问题
 
-**每个国家是自己的协议吗？**  
-是。流程架子参考泰国；locale/区号/资料/证件按所选国家绑定。
+**每个国家是自己的协议吗？**  是。流程架子参考泰国；locale/区号/资料/证件按所选国家绑定。
 
-**资料会串成泰国吗？**  
-不会。`address.country` 与手机区号强制等于所选国。
+**资料会串成泰国吗？**  不会。`address.country` 与手机区号强制等于所选国；资料来自该国 Faker locale。
 
-**Windows curl 77 / CA 错误？**  
-用户目录含中文时 libcurl 读 certifi 失败。`ssl_env` 会把 CA 镜像到 `C:\ProgramData\PP-TH\cacert.pem`。`start.bat` / `web.py` / `main.py` 启动时会执行。
+**代理 403 / curl 97 / forbidden ip？**  多为代理商拒绝当前公网 IP；加白名单或开 TUN。详见 [PROXY.md](./PROXY.md)。
 
-**代理 403 / forbidden ip？**  
-仅当代理商正文明确 `forbidden ip=… not supported` 时才是 IP 白名单问题。  
-若是 **curl 35 / SSL 握手失败**：多半是本机 Clash 半开（端口在听、HTTPS 不通）或住宅节点挂了——先关「启用代理」直连冒烟，或开 TUN，或点「测试代理」。见 [PROXY.md](./PROXY.md)。
-
-**开了代理却秒失败？**  
-只要代理框**填了 URL**，探测失败会硬停。可：① 关代理开关冒烟；② 先「测试代理」看到出口 IP；③ 开客户端 TUN 并清空代理框。
-
-**未填代理却很慢 / 失败？**  
-旧逻辑会探测坏系统代理。当前：`PAYPAL_USE_SYSTEM_PROXY=0`（默认）且未填 URL 时直接 **direct**。
-
-**假 BA 失败正常吗？**  
-正常。PayPal 会返回 `INVALID_TOKEN` 或 authchallenge；说明协议链路已通。
-
-**任务创建了但详情 404？**  
-浏览器需带 `paypal_web_device_id` cookie；API 调试请用 cookie jar。
-
-**Web 上还能选 Headless / Roxy 吗？**  
-不能。页面三项已固定纯协议（与巴西公开包一致）。CLI / 环境变量仍可覆盖高级模式（见 `SETUP.md`）。
+**假 BA？**  一般只到 Phase 0/1。
 
 ---
 
 ## 边界
 
-- 不能保证自动过 DataDome / hCaptcha（默认 manual/official）
-- 动态状态不可死 HAR 硬编码；ModXO id 优先在线扫描
+- 不能自动过 DataDome / hCaptcha
+- 动态状态不可死 HAR 硬编码
 - 仅供授权研究；仓库不含真实密钥（见 `SANITIZATION.md`）
-
----
-
-## 浏览器运行时与接码
-
-| 能力 | 说明 |
-|------|------|
-| **protocol** | 纯 HTTP（**Web 固定默认**，推荐） |
-| **headless / Roxy / auto** | 仅 **CLI / env** 高级路径；Web UI 不提供选择 |
-| **MTR** | Web 固定 `python_generated`；CLI 可 headless/roxy |
-| **SMSBower** | 自动接码（默认关），与 Web 手填 OTP 并存 |
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-headless.txt
-.\.venv\Scripts\python.exe -m playwright install chromium
-```
 
 ---
 
 ## 许可证
 
 私有仓库。
+
+
+---
+
+## 浏览器运行时与接码（参考巴西 openai-paypal）
+
+| 能力 | 说明 |
+|------|------|
+| **protocol** | 纯 HTTP（默认） |
+| **headless** | Playwright 无头 Chromium 辅助 Phase0/1 风控 |
+| **auto** | 有 Roxy Key 优先 Roxy，否则 headless，失败回退协议 |
+| **Roxy** | RoxyBrowser Local API（需本机 Roxy + API Key） |
+| **MTR** | headless/roxy/python_generated 信号（随运行时） |
+| **SMSBower** | 自动接码（默认关），与 Web 手填 OTP 并存 |
+
+安装 headless 依赖：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-headless.txt
+.\.venv\Scripts\python.exe -m playwright install chromium
+```
 
 Web 表单可选运行时与 SMSBower；CLI：
 
@@ -370,13 +285,15 @@ $env:PAYPAL_ROXY_API_PORT = "50000"
 $env:PAYPAL_RUNTIME_MODE = "auto"
 ```
 
-### 运行时选择（CLI / env）
+### 运行时选择
 
 | 模式 | 行为 |
 |------|------|
-| `protocol` | 纯 HTTP（**Web 固定**；CLI 默认） |
-| `headless` | Playwright 无头辅助 Phase0/1（CLI） |
-| `auto` | 有 Roxy Key 优先 Roxy，否则 headless，失败回退 protocol（CLI） |
+| `protocol` | 纯 HTTP（默认） |
+| `headless` | Playwright 无头辅助 Phase0/1 |
+| `auto` | 有 Roxy Key 优先 Roxy，否则 headless，失败回退 protocol |
+
+Web 表单「运行时」下拉；CLI：`--runtime protocol|headless|auto`
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --country JP --ba-token BA-xxx --phone +81... --runtime headless
@@ -397,9 +314,9 @@ $env:SMSBOWER_API_KEY = "your_key"
 
 | 项 | 默认 |
 |----|------|
-| 指纹 / DataDome / MTR | **random / protocol / python_generated**（巴西纯协议，页面只读） |
+| 指纹 / DataDome / MTR | **本地 Headless**（需 Playwright Chromium） |
 | 业务层 | **仅 A 层实跑**（无 B/C 开关） |
-| 代理 | 填了 URL 才硬探测；未填 direct；探测用 ASCII CA |
-| 文档 | [SETUP.md](./SETUP.md) · [PROXY.md](./PROXY.md) · [AI_HANDOFF.md](./AI_HANDOFF.md) |
+| 代理 | 填写优先；自动 socks5h；系统代理可回退 |
+| 文档 | [SETUP.md](./SETUP.md) · [PROXY.md](./PROXY.md) |
 
-变更涉及：`web.py`、`web_static/*`、`paypal/proxy.py`、`paypal/session.py`、`paypal/ssl_env.py`、`config.py`。
+变更涉及：`web.py`、`paypal/proxy.py`、`paypal/proxy_bridge.py`、`paypal/session.py`、`paypal/local_headless.py`。

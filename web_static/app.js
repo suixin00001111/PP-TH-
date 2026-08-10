@@ -435,28 +435,44 @@ function setSelectIfValid(sel, value, fallback) {
   else if (fallback) sel.value = fallback;
 }
 
-function normalizeFingerprintSource(_v) {
-  // Brazil pure-protocol only (no headless/roxy knobs in UI).
-  return "random";
+function normalizeFingerprintSource(v) {
+  // Default headless (母版可跑通). random | headless | roxy
+  const x = String(v || "headless").trim().toLowerCase().replace(/-/g, "_");
+  if (x === "random" || x === "program" || x === "python" || x === "synthetic") return "random";
+  if (x === "roxy" || x === "browser" || x === "roxy_browser") return "roxy";
+  // headless/local_headless/playwright/auto/empty -> headless
+  return "headless";
 }
 
 
-function normalizeDatadomeMode(_v) {
-  // Brazil pure-protocol only.
-  return "protocol";
+function normalizeDatadomeMode(v) {
+  // Default headless (母版可跑通). protocol | headless | roxy
+  const x = String(v || "headless").trim().toLowerCase().replace(/-/g, "_");
+  if (x === "protocol" || x === "edge" || x === "off") return "protocol";
+  if (x === "roxy" || x === "browser") return "roxy";
+  // headless/local_headless/playwright/auto/empty -> headless
+  return "headless";
 }
 
 
-function normalizeMtrRuntime(_v) {
-  // Brazil pure-protocol only (template sealedResult).
-  return "python_generated";
+function normalizeMtrRuntime(v) {
+  // Default headless (母版可跑通). python_generated | headless | roxy
+  const x = String(v || "headless").trim().toLowerCase().replace(/-/g, "_");
+  if (x === "python_generated" || x === "python" || x === "protocol" || x === "block" || x === "off") return "python_generated";
+  if (x === "roxy" || x === "browser") return "roxy";
+  // headless/local_headless/playwright/auto/empty -> headless
+  return "headless";
 }
 
 
 
 function needsRoxyConfig() {
-  // Web path is pure protocol (Brazil); Roxy panel stays optional/manual only.
-  return false;
+  const modes = [
+    normalizeFingerprintSource($("#fingerprintSource")?.value || "headless"),
+    normalizeDatadomeMode($("#datadomeMode")?.value || "headless"),
+    normalizeMtrRuntime($("#mtrRuntime")?.value || "headless"),
+  ];
+  return modes.some((m) => m === "roxy" || m === "auto");
 }
 
 function syncRoxyPanel() {
@@ -560,31 +576,27 @@ function normalizeBuyerIdentityMode(value) {
 }
 
 function getRuntimePayload() {
-  // Fixed Brazil pure-protocol knobs — UI no longer offers headless/roxy.
   return {
-    fingerprint_source: "random",
-    datadome_mode: "protocol",
-    mtr_runtime: "python_generated",
-    runtime_mode: "protocol",
+    fingerprint_source: normalizeFingerprintSource($("#fingerprintSource")?.value || "headless"),
+    datadome_mode: normalizeDatadomeMode($("#datadomeMode")?.value || "headless"),
+    mtr_runtime: normalizeMtrRuntime($("#mtrRuntime")?.value || "headless"),
     buyer_identity_mode: normalizeBuyerIdentityMode($("#buyerIdentityMode")?.value || "legacy"),
   };
 }
 
 function loadRuntimePrefs() {
   try {
-    // Force pure protocol; drop any legacy headless/roxy sticky prefs.
+    // Default headless stack (aligned with openai-paypal runnable path).
+    // Clear legacy sticky protocol/random prefs so UI stays headless-first.
     try {
       localStorage.removeItem(FP_KEY);
       localStorage.removeItem(DD_KEY);
       localStorage.removeItem(MTR_KEY);
       localStorage.removeItem(RUNTIME_KEY);
     } catch (e0) {}
-    const fp = document.querySelector("#fingerprintSource");
-    const dd = document.querySelector("#datadomeMode");
-    const mtr = document.querySelector("#mtrRuntime");
-    if (fp) fp.value = "random";
-    if (dd) dd.value = "protocol";
-    if (mtr) mtr.value = "python_generated";
+    setSelectIfValid(document.querySelector("#fingerprintSource"), "headless", "headless");
+    setSelectIfValid(document.querySelector("#datadomeMode"), "headless", "headless");
+    setSelectIfValid(document.querySelector("#mtrRuntime"), "headless", "headless");
     const sb = localStorage.getItem(SMSBOWER_ON_KEY);
     if (sb != null && document.querySelector("#smsbowerEnabled")) {
       document.querySelector("#smsbowerEnabled").checked = sb === "1";
@@ -1015,3 +1027,4 @@ health();
 refreshJobs().then(() => pollCurrent(true));
 setInterval(health, 8000);
 setInterval(refreshJobs, 5000);
+setInterval(() => { if (state.currentJobId) pollCurrent(false); }, 3000);

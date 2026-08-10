@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@400;500;600;700&family=Orbitron:wght@600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/app.css?v=3" />
 </head>
 <body>
   <div class="bg-grid" aria-hidden="true"></div>
@@ -82,21 +82,31 @@
           </label>
           <p id="phoneHint" class="field-hint">未开 SMSBower 时请手填该国完整手机号</p>
           </div>
-          <div class="field-block runtime-fixed">
-            <div class="section-title compact">
-              <h3>风控三项（巴西纯协议）</h3>
-            </div>
-            <ul class="runtime-fixed-list">
-              <li><strong>浏览器指纹来源</strong>：程序随机生成（random）</li>
-              <li><strong>DataDome 模式</strong>：协议边缘模拟（protocol）</li>
-              <li><strong>MTR sealedResult</strong>：程序模板生成（python_generated）</li>
-            </ul>
-            <p class="field-hint">对齐巴西公开包：固定纯 HTTP，不弹浏览器 / 不走 Roxy。无需再选手动模式。</p>
-            <!-- hidden fixed knobs for form payload compatibility -->
-            <input type="hidden" id="fingerprintSource" name="fingerprintSource" value="random" />
-            <input type="hidden" id="datadomeMode" name="datadomeMode" value="protocol" />
-            <input type="hidden" id="mtrRuntime" name="mtrRuntime" value="python_generated" />
-          </div>
+          <label>
+            <span>浏览器指纹来源</span>
+            <select id="fingerprintSource" name="fingerprintSource">
+              <option value="headless" selected>本地 Headless（Playwright，推荐/可跑通）</option>
+              <option value="random">程序随机生成（纯协议）</option>
+              <option value="roxy">Roxy 指纹浏览器</option>
+            </select>
+          </label>
+          <label>
+            <span>DataDome 模式</span>
+            <select id="datadomeMode" name="datadomeMode">
+              <option value="headless" selected>本地 Headless（Playwright，推荐/可跑通）</option>
+              <option value="protocol">协议边缘模拟（纯协议）</option>
+              <option value="roxy">Roxy 浏览器执行</option>
+            </select>
+          </label>
+          <label>
+            <span>MTR sealedResult</span>
+            <select id="mtrRuntime" name="mtrRuntime">
+              <option value="headless" selected>本地 Headless（Playwright，推荐/可跑通）</option>
+              <option value="python_generated">程序模板生成（纯协议）</option>
+              <option value="roxy">Roxy 浏览器执行</option>
+            </select>
+          </label>
+          <p class="field-hint">默认对齐母版 openai-paypal：三项全走 Headless（Playwright）。纯协议可手动切 random/protocol/python_generated；Roxy 需填 API Key。</p>
           <label>
             <span>Buyer 身份模式</span>
             <select id="buyerIdentityMode" name="buyerIdentityMode">
@@ -283,5 +293,5 @@
   </div>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>

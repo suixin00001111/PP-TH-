@@ -1,5 +1,10 @@
-﻿# Optional: Playwright for headless fingerprint / DataDome / MTR
+# Optional: Playwright for headless fingerprint / DataDome / MTR
 # Install:
 #   pip install -r requirements-headless.txt
 #   python -m playwright install chromium
-playwright>=1.40.0
+#
+# Local/dev (modern OS): latest playwright is fine.
+# CentOS 7 server (GLIBC 2.17): MUST pin playwright==1.30.0
+#   pip install playwright==1.30.0
+#   python -m playwright install chromium
+playwright

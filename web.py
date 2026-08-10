@@ -25,11 +25,6 @@ from urllib.parse import unquote, urlparse
 
 from loguru import logger
 
-# Fix curl_cffi CA path on non-ASCII Windows user profiles before any HTTP client starts.
-from paypal.ssl_env import ensure_ssl_cert_env
-
-ensure_ssl_cert_env()
-
 from paypal.flow import PayPalFlow
 from paypal.models import BillingAddress, CardInfo, UserInfo
 from paypal.oaipy_data import generate_address, generate_card, generate_oaipy_profile, generate_user
@@ -559,35 +554,6 @@ def classify_proxy_transport_error(msg: str, body: str = "") -> str:
     """Map curl/proxy transport failures to actionable Chinese guidance."""
     text = f"{msg}\n{body}".strip()
     low = text.lower()
-
-    # Already a Chinese actionable message from resolve_outbound_proxy — keep it.
-    if "出网探测失败" in text or "填写的住宅代理不可用" in text or "系统代理已检测到" in text:
-        return text[:900]
-
-    # Prefer real TLS / CA failures over generic "forbidden IP" (which used to
-    # false-match on long probe error blobs containing "ip" + "not supported").
-    if "curl: (77)" in low or "trust anchors" in low or "error adding trust anchors" in low:
-        return (
-            "TLS 证书库加载失败（curl 77）。常见于 Windows 用户名含中文时 certifi 路径无法被 libcurl 读取。"
-            "程序会自动把 CA 复制到 C:\\ProgramData\\PP-TH\\cacert.pem；若仍失败请重启 Web 或设置 "
-            "PAYPAL_USE_CURL_CFFI=0 改用 httpx。"
-            f" 原始：{msg[:160]}"
-        )
-    if (
-        "curl: (35)" in low
-        or "ssl_connect" in low
-        or "ssl_error_syscall" in low
-        or "unexpected_eof" in low
-        or "eof occurred in violation of protocol" in low
-    ):
-        return (
-            "经代理建立 TLS 失败（SSL 握手被对端关闭）。"
-            "常见：本机 Clash/系统代理半开（只开了系统代理、未开 TUN）、或填写的住宅节点不可用。"
-            "处理：1) 关闭「启用代理」用直连冒烟（本机可直连 PayPal 时）；"
-            "2) 开客户端 TUN 后再测；3) 若用住宅代理，先点「测试代理」确认出口 IP。"
-            f" 原始：{msg[:140]}"
-        )
-
     m = re.search(r"forbidden\s+ip\s*=\s*([0-9.]+)\s*not supported", text, re.I)
     if m:
         return (
@@ -597,8 +563,7 @@ def classify_proxy_transport_error(msg: str, body: str = "") -> str:
             "2) 或在 cliproxy 后台把该 IP 加入白名单后再填自定义代理；"
             "3) 不要同时开 TUN 又填 cliproxy（容易双层代理/超时）。"
         )
-    # Only treat explicit provider phrases as IP block (avoid false positives).
-    if "forbidden ip" in low or re.search(r"ip\s*=\s*[0-9.]+\s*not supported", low):
+    if "forbidden ip" in low or ("not supported" in low and "ip" in low):
         return (
             f"代理拒绝当前接入 IP。原始信息：{text[:180]}。"
             "请到代理商后台检查 IP 白名单/套餐权限。"
@@ -651,7 +616,7 @@ def classify_proxy_transport_error(msg: str, body: str = "") -> str:
     if "failed to perform" in low and ("proxy" in low or "curl:" in low):
         return (
             f"代理链路不可用：{msg[:180]}。"
-            "请先测试代理；不可用时关闭代理开关用直连/TUN，或修复住宅节点白名单。"
+            "请先测试代理；不可用时清空代理并用 TUN，或修复 cliproxy 白名单/节点。"
         )
     return text if text else str(msg)
 
@@ -694,22 +659,30 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
             "exit_ip": exit_ip,
             "latency_ms": int((_time.time() - started) * 1000),
         }
-    # Empty raw → try system proxy (Brazil-like). Filled raw → filled first, system fallback.
+    # Empty raw → try system proxy, then direct (VPS). Filled raw → filled first.
     saved_env = scrub_process_proxy_env()
     try:
         working, exit_ip, latency_ms, note = resolve_outbound_proxy(
             raw,
             allow_system_fallback=True,
+            allow_direct_fallback=True,
             timeout=15.0,
         )
     finally:
         restore_process_proxy_env(saved_env)
 
-    proxy_config = ProxyConfig(
-        enabled=True,
-        entry=working,
-        resolved_from=note,
-    )
+    if working is None or note == "direct":
+        proxy_config = ProxyConfig(
+            enabled=False,
+            entry=None,
+            resolved_from=note or "direct",
+        )
+    else:
+        proxy_config = ProxyConfig(
+            enabled=True,
+            entry=working,
+            resolved_from=note,
+        )
 
     import time as _time
     try:
@@ -722,7 +695,8 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
         with curl_requests.Session(timeout=20, impersonate="chrome131") as client:
             if hasattr(client, "trust_env"):
                 client.trust_env = False
-            client.proxies = {"http": proxy_config.url, "https": proxy_config.url}
+            if proxy_config.url:
+                client.proxies = {"http": proxy_config.url, "https": proxy_config.url}
             resp = client.get("https://www.paypal.com/robots.txt", allow_redirects=True)
             status = int(getattr(resp, "status_code", 0) or 0)
             if status < 200 or status >= 500:
@@ -730,11 +704,19 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
     except Exception as exc:
         raise ValueError(classify_proxy_transport_error(str(exc))) from exc
 
+    if working is None or note == "direct":
+        mode = "direct"
+        scheme = "direct"
+        label = "直连 (direct)"
+    else:
+        mode = "custom" if raw else "system"
+        scheme = getattr(working, "scheme", "") or ""
+        label = proxy_config.label
     return {
         "ok": True,
-        "mode": "custom" if raw else "system",
-        "proxy_label": proxy_config.label,
-        "resolved_scheme": working.scheme,
+        "mode": mode,
+        "proxy_label": label,
+        "resolved_scheme": scheme,
         "resolve_note": note,
         "status": status,
         "exit_ip": exit_ip,
@@ -754,12 +736,12 @@ class WebJob:
     ba_token: str
     phone: str
     country: str = "TH"
-    runtime_mode: str = "protocol"
+    runtime_mode: str = "headless"
     profile: str = "real"
-    fingerprint_source: str = "random"
-    datadome_mode: str = "protocol"
-    mtr_runtime: str = "python_generated"
-    risk_signals_mode: str = "protocol"
+    fingerprint_source: str = "headless"
+    datadome_mode: str = "headless"
+    mtr_runtime: str = "headless"
+    risk_signals_mode: str = "headless"
     buyer_identity_mode: str = "legacy"
     continue_merchant: bool = False
     smsbower_enabled: bool = False
@@ -927,10 +909,10 @@ class WebJob:
                 "roxy_api_host": getattr(self, "roxy_api_host", "127.0.0.1"),
                 "roxy_api_port": getattr(self, "roxy_api_port", 50000),
                 "roxy_headless": bool(getattr(self, "roxy_headless", True)),
-                "fingerprint_source": getattr(self, "fingerprint_source", "random"),
-            "datadome_mode": getattr(self, "datadome_mode", "protocol"),
-            "mtr_runtime": getattr(self, "mtr_runtime", "python_generated"),
-            "risk_signals_mode": getattr(self, "risk_signals_mode", "protocol"),
+                "fingerprint_source": getattr(self, "fingerprint_source", "headless"),
+            "datadome_mode": getattr(self, "datadome_mode", "headless"),
+            "mtr_runtime": getattr(self, "mtr_runtime", "headless"),
+            "risk_signals_mode": getattr(self, "risk_signals_mode", "headless"),
             "buyer_identity_mode": getattr(self, "buyer_identity_mode", "legacy"),
             "continue_merchant": bool(getattr(self, "continue_merchant", False)),
                 "smsbower_enabled": self.smsbower_enabled,
@@ -1322,9 +1304,9 @@ def create_job(
     country: str = "TH",
     runtime_mode: str = "",
     profile: str = "real",
-    fingerprint_source: str = "random",
-    datadome_mode: str = "protocol",
-    mtr_runtime: str = "python_generated",
+    fingerprint_source: str = "headless",
+    datadome_mode: str = "headless",
+    mtr_runtime: str = "headless",
     risk_signals_mode: str = "",
     continue_merchant: bool = False,
     buyer_identity_mode: str = "legacy",
@@ -1359,18 +1341,23 @@ def create_job(
     profile = "real"  # Web UI is real-run only (no test/smoke profile)
     continue_merchant = False  # A-layer only (aligned with openai-paypal; no B/C switch)
 
-    # Web path = Brazil pure-protocol only (ignore client headless/roxy knobs).
-    # fingerprint=random, DataDome=protocol, MTR=python_generated template.
-    fingerprint_source = "random"
-    datadome_mode = "protocol"
-    mtr_runtime = "python_generated"
-    risk_signals_mode = "protocol"
+    # Default headless fine knobs (母版 openai-paypal 可跑通路径)
+    fingerprint_source = str(fingerprint_source or "headless").strip().lower().replace("-", "_")
+    datadome_mode = str(datadome_mode or "headless").strip().lower().replace("-", "_")
+    mtr_runtime = str(mtr_runtime or "headless").strip().lower().replace("-", "_")
+    if fingerprint_source not in FINGERPRINT_SOURCE_CHOICES:
+        raise ValueError(f"unsupported fingerprint_source: {fingerprint_source}")
+    if datadome_mode not in DATADOME_MODE_CHOICES:
+        raise ValueError(f"unsupported datadome_mode: {datadome_mode}")
+    if mtr_runtime not in MTR_RUNTIME_CHOICES:
+        raise ValueError(f"unsupported mtr_runtime: {mtr_runtime}")
 
     buyer_identity_mode = str(buyer_identity_mode or "legacy").strip().lower().replace("-", "_").replace(" ", "_")
     if buyer_identity_mode in {"", "original", "default", "classic", "v1", "phase4"}:
         buyer_identity_mode = "legacy"
     elif buyer_identity_mode in {
-        "guest_elevate", "bind_ec", "elevate", "guest_bind", "bind", "v2", "elevate_guest_bind_ec",
+        "guest_elevate", "bind_ec", "elevate", "guest_bind", "bind", "v2",
+        "elevate_guest_bind_ec", "identity_elevation",
     }:
         buyer_identity_mode = "elevate_bind"
     elif buyer_identity_mode not in {"legacy", "elevate_bind"}:
@@ -1385,9 +1372,20 @@ def create_job(
     roxy_api_port = max(1, min(roxy_api_port, 65535))
     roxy_workspace_id = (roxy_workspace_id or "").strip()
     roxy_project_id = (roxy_project_id or "").strip()
-    # Optional: still accept a Roxy key in payload for future CLI-like use,
-    # but Web jobs never require it (pure protocol).
-    if roxy_api_key:
+    if roxy_modes_need_key(fingerprint_source, datadome_mode, mtr_runtime):
+        env_key = (os.getenv("PAYPAL_ROXY_API_KEY") or os.getenv("ROXY_API_KEY") or "").strip()
+        if not roxy_api_key and not env_key:
+            raise ValueError("已选择 Roxy/自动，请在前端填写 Roxy API Key，或配置环境变量 PAYPAL_ROXY_API_KEY")
+        apply_web_roxy_config(
+            roxy_api_key=roxy_api_key or env_key,
+            roxy_api_host=roxy_api_host,
+            roxy_api_port=roxy_api_port,
+            roxy_headless=bool(roxy_headless),
+            roxy_workspace_id=roxy_workspace_id,
+            roxy_project_id=roxy_project_id,
+        )
+    elif roxy_api_key:
+        # still allow saving key for later even if not used this job
         apply_web_roxy_config(
             roxy_api_key=roxy_api_key,
             roxy_api_host=roxy_api_host,
@@ -1397,23 +1395,40 @@ def create_job(
             roxy_project_id=roxy_project_id,
         )
 
-    # Force protocol coarse mode so resolve_and_apply cannot flip to headless/roxy.
-    runtime_mode = "protocol"
+    risk_signals_mode = implicit_risk_signals_mode(
+        fingerprint_source,
+        datadome_mode,
+        mtr_runtime,
+        risk_signals_mode,
+    )
+    if risk_signals_mode not in RISK_SIGNALS_MODE_CHOICES:
+        risk_signals_mode = "headless"
+
+    # Coarse mode for browser engine; fine knobs are source of truth (Brazil Web).
+    # Only honor explicit runtime_mode if the client actually sent one.
+    explicit_runtime = str(runtime_mode or "").strip().lower().replace("-", "_")
+    if explicit_runtime in {"", "default"}:
+        runtime_mode = derive_runtime_mode(fingerprint_source, datadome_mode, mtr_runtime)
+    else:
+        runtime_mode = explicit_runtime
+
     resolved = resolve_and_apply(
-        runtime_mode="protocol",
+        runtime_mode=runtime_mode,
         profile=profile,
-        fingerprint_source="random",
-        datadome_mode="protocol",
-        mtr_runtime="python_generated",
-        risk_signals_mode="protocol",
+        fingerprint_source=fingerprint_source,
+        datadome_mode=datadome_mode,
+        mtr_runtime=mtr_runtime,
+        risk_signals_mode=risk_signals_mode,
         continue_merchant=False,
     )
-    runtime_mode = "protocol"
+    # Prefer explicit fine modes (Brazil path); coarse comes from resolver/engine.
+    runtime_mode = resolved.runtime_mode or runtime_mode
     profile = "real"
-    fingerprint_source = "random"
-    datadome_mode = "protocol"
-    mtr_runtime = "python_generated"
-    risk_signals_mode = "protocol"
+    # fine knobs already validated above — keep them authoritative
+    fingerprint_source = fingerprint_source
+    datadome_mode = datadome_mode
+    mtr_runtime = mtr_runtime
+    risk_signals_mode = risk_signals_mode or resolved.risk_signals_mode
     continue_merchant = False  # never run B/C from Web (A-layer only)
     smsbower_enabled = bool(smsbower_enabled)
     smsbower_api_key = (smsbower_api_key or "").strip()
@@ -1533,56 +1548,52 @@ def run_job(job: WebJob) -> None:
             try:
                 filled_raw = ""
                 if proxy_config.enabled and proxy_config.entry:
-                    filled_raw = (proxy_config.entry.url or "").strip()
-                # Only hard-require a working proxy when the user explicitly enabled
-                # one or pasted a proxy URL. Otherwise allow direct / soft system assist
-                # so a half-broken Clash "系统代理" port does not block the whole job.
-                # Hard-require only when user pasted a proxy URL.
-                # "Enabled + empty raw" should not hard-fail on half-broken Clash 7897.
-                require_proxy = bool(filled_raw)
+                    filled_raw = proxy_config.entry.url or ""
+                # Brazil-like: filled residential first; if provider bans China IP,
+                # automatically use Windows 系统代理 (e.g. 127.0.0.1:7897).
                 working, exit_ip, latency_ms, note = resolve_outbound_proxy(
                     filled_raw,
-                    allow_system_fallback=bool(filled_raw) or bool(proxy_config.enabled),
-                    require_proxy=require_proxy,
+                    allow_system_fallback=True,
+                    allow_direct_fallback=True,
                     timeout=15.0,
                 )
                 original_scheme = (
                     proxy_config.entry.scheme if proxy_config.entry else ""
                 )
-                if working is not None:
-                    proxy_config = ProxyConfig(
-                        enabled=True,
-                        entry=working,
-                        resolved_from=note,
-                    )
-                else:
-                    # Direct path: keep proxy disabled; PayPalSession uses no proxy URL.
+                # working is None => direct public egress (common on clean VPS)
+                if working is None or note == "direct":
                     proxy_config = ProxyConfig(
                         enabled=False,
                         entry=None,
                         resolved_from=note or "direct",
                     )
+                    logger.info(
+                        "Proxy resolved for job: direct exit_ip={} latency={}ms note={}",
+                        exit_ip or "",
+                        latency_ms,
+                        note,
+                    )
+                else:
+                    proxy_config = ProxyConfig(
+                        enabled=True,
+                        entry=working,
+                        resolved_from=note,
+                    )
+                    logger.info(
+                        "Proxy resolved for job: {} exit_ip={} latency={}ms note={} filled_scheme={}",
+                        proxy_config.label,
+                        exit_ip or "",
+                        latency_ms,
+                        note,
+                        original_scheme,
+                    )
+                    if "system-fallback" in note or note.startswith("system"):
+                        logger.warning(
+                            "Using system/local proxy path ({}). "
+                            "Filled cliproxy was skipped or blocked for this network.",
+                            note,
+                        )
                 job._proxy_config = proxy_config
-                logger.info(
-                    "Proxy resolved for job: {} exit_ip={} latency={}ms note={} filled_scheme={} require_proxy={}",
-                    proxy_config.label,
-                    exit_ip or "",
-                    latency_ms,
-                    note,
-                    original_scheme,
-                    require_proxy,
-                )
-                if working is None:
-                    logger.warning(
-                        "No working proxy selected ({}); continuing on direct network path. "
-                        "For live BA success use a target-country residential proxy.",
-                        note,
-                    )
-                elif "system" in str(note).lower():
-                    logger.warning(
-                        "Using system/local proxy path ({}).",
-                        note,
-                    )
             except Exception:
                 restore_process_proxy_env(saved_proxy_env)
                 raise
@@ -1801,26 +1812,20 @@ class WebHandler(BaseHTTPRequestHandler):
                     "runtime_mode": "protocol",
                     "profile": "real",
                 },
-                "resolved": {
-                    "fingerprint_source": "random",
-                    "datadome_mode": "protocol",
-                    "mtr_runtime": "python_generated",
-                    "risk_signals_mode": "protocol",
-                    "runtime_mode": "protocol",
-                    "profile": "real",
-                },
+                "resolved": resolved.as_public_dict(),
                 "profiles": ["real"],
-                # Web UI locks to Brazil pure-protocol; headless/roxy only via CLI/env.
-                "fingerprint_sources": ["random"],
-                "datadome_modes": ["protocol"],
-                "mtr_runtimes": ["python_generated"],
+                "fingerprint_sources": ["random", "headless", "roxy"],
+                "datadome_modes": ["protocol", "headless", "roxy"],
+                "mtr_runtimes": ["python_generated", "headless", "roxy"],
                 "buyer_identity_modes": [
                     {"value": "legacy", "label": "原版流程"},
                     {"value": "elevate_bind", "label": "注册后升 Guest、绑 EC 再授权"},
                 ],
                 "notes": [
-                    "Web fixed Brazil pure-protocol: fingerprint=random, DataDome=protocol, MTR=python_generated",
-                    "No browser / Roxy knobs on Web (aligned with paypal-pay-public-nocdk)",
+                    "Aligned with Brazil pure-protocol success path: random + protocol + python_generated",
+                    "Roxy optional when Local API + key available",
+                    "auto prefers Roxy then falls back",
+                    "retries available like Brazil Web",
                     "Web is real-run only; A-layer only (no merchant B/C)",
                 ],
             })
@@ -2008,21 +2013,6 @@ class WebHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store" if resolved.name == "index.html" else "public, max-age=3600")
         self.send_security_headers()
-        # Ensure browser gets device cookie on first page load (not only on JSON APIs).
-        if resolved.name == "index.html":
-            self.get_device_id()
-            device_cookie = getattr(self, "_set_device_cookie", "")
-            if device_cookie:
-                cookie_attrs = [
-                    f"{DEVICE_COOKIE_NAME}={device_cookie}",
-                    "Path=/",
-                    f"Max-Age={DEVICE_COOKIE_MAX_AGE}",
-                    "SameSite=Strict",
-                    "HttpOnly",
-                ]
-                if COOKIE_SECURE:
-                    cookie_attrs.append("Secure")
-                self.send_header("Set-Cookie", "; ".join(cookie_attrs))
         self.end_headers()
         self.wfile.write(data)
 

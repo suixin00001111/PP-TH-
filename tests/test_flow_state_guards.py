@@ -139,9 +139,10 @@ def patched_signals():
 
 
 class FlowStateGuardTests(unittest.TestCase):
-    def test_phase0_datadome_protocol_continues_after_empty_token_post(self):
-        # Protocol mode matches openai-paypal peer: one empty-token POST, then
-        # continue with captured client-id edges instead of hard-failing Phase 0.
+    def test_phase0_datadome_continues_with_protocol_fallback(self):
+        # Master behavior: after the protocol empty-token POST, a remaining
+        # DataDome challenge does NOT hard-fail — Phase 0 keeps going and later
+        # phases rely on client-id/cookie replay.
         session = FakeSession(
             gets=[FakeResponse(status_code=403, text="DataDome challenge") for _ in range(4)],
             posts=[FakeResponse(status_code=403, text="DataDome challenge still blocked")],
@@ -152,7 +153,6 @@ class FlowStateGuardTests(unittest.TestCase):
             flow._phase0_initial_load()
 
         self.assertEqual(len(session.post_calls), 1)
-        self.assertTrue(getattr(flow, "_phase0_datadome_blocked", False))
 
     def test_missing_modxo_ids_cannot_continue_without_ec(self):
         session = FakeSession(
@@ -160,12 +160,17 @@ class FlowStateGuardTests(unittest.TestCase):
         )
         flow = make_flow(session, action_ids=False)
 
-        with patched_signals(), self.assertRaisesRegex(RuntimeError, "no valid EC token"):
+        with patched_signals(), self.assertRaisesRegex(
+            RuntimeError, "did not produce an EC checkout token"
+        ):
             flow._phase2_create_account()
 
         self.assertEqual(session.graphql_calls, [])
 
-    def test_generic_error_redirect_is_rejected(self):
+    def test_generic_error_redirect_is_followed(self):
+        # Master behavior: a generic-error Location redirect is followed like any
+        # other redirect (no fail-fast); the flow later fails only when no EC
+        # token can be extracted.
         session = FakeSession(
             posts=[
                 FakeResponse(
@@ -173,14 +178,25 @@ class FlowStateGuardTests(unittest.TestCase):
                     url="https://www.paypal.com/pay?token=BA-TEST12345678",
                     headers={"Location": "/pay/generic-error?code=invalid"},
                 )
-            ]
+            ],
+            gets=[
+                FakeResponse(
+                    status_code=200,
+                    url="https://www.paypal.com/pay/generic-error?code=invalid",
+                    text="<html><body>generic error page</body></html>",
+                )
+            ],
         )
         flow = make_flow(session, action_ids=False)
 
-        with patched_signals(), self.assertRaisesRegex(RuntimeError, "generic-error"):
+        with patched_signals(), self.assertRaisesRegex(
+            RuntimeError, "did not produce an EC checkout token"
+        ):
             flow._phase2_create_account()
 
-        self.assertEqual(session.graphql_calls, [])
+        # Redirect was followed (GET performed), not rejected.
+        self.assertEqual(len(session.get_calls), 1)
+        self.assertTrue(any("generic-error" in str(url) for url, _ in session.get_calls))
 
     def test_modxo_transition_without_ec_is_rejected(self):
         session = FakeSession(
@@ -204,7 +220,9 @@ class FlowStateGuardTests(unittest.TestCase):
         )
         flow = make_flow(session, action_ids=True)
 
-        with patched_signals(), self.assertRaisesRegex(RuntimeError, "no valid EC token"):
+        with patched_signals(), self.assertRaisesRegex(
+            RuntimeError, "did not produce an EC checkout token"
+        ):
             flow._phase2_create_account()
 
         self.assertEqual(session.graphql_calls, [])
@@ -244,9 +262,9 @@ class FlowStateGuardTests(unittest.TestCase):
         with patched_signals(), self.assertRaisesRegex(RuntimeError, "refusing to substitute"):
             flow._phase3_signup_and_2fa()
 
-    def test_phase0_hard_datadome_page_marks_blocked_in_protocol_mode(self):
-        # 200 challenge page: protocol mode records the block and continues
-        # (headless/roxy modes still hard-fail via _raise_if_phase0_still_datadome_blocked).
+    def test_phase0_hard_datadome_page_continues_after_load(self):
+        # Master behavior: a 200 challenge page does not hard-stop Phase 0.
+        # Static ModXO ids are still extracted and the flow continues.
         session = FakeSession(
             gets=[
                 FakeResponse(
@@ -265,9 +283,11 @@ class FlowStateGuardTests(unittest.TestCase):
             flow._phase0_initial_load()
 
         self.assertEqual(session.post_calls, [])
-        self.assertTrue(getattr(flow, "_phase0_datadome_blocked", False))
 
-    def test_ineligible_modxo_redirect_is_rejected(self):
+    def test_ineligible_modxo_redirect_is_followed(self):
+        # Master behavior: a modxo_redirect_reason=ineligible URL is followed
+        # like any other redirect; the flow only fails later when no EC token
+        # can be extracted.
         ineligible_url = (
             "https://www.paypal.com/checkoutweb/signup?modxo_redirect_reason=ineligible"
             "&country.x=NL&ba_token=BA-TEST12345678"
@@ -280,17 +300,21 @@ class FlowStateGuardTests(unittest.TestCase):
                     text=json.dumps({"onboardingRedirectUrl": ineligible_url}),
                 ),
             ],
+            gets=[
+                FakeResponse(status_code=200, url=ineligible_url, text=SIGNUP_HTML),
+            ],
         )
         flow = make_flow(session, action_ids=True)
 
         with patched_signals(), self.assertRaisesRegex(
             RuntimeError,
-            r"modxo_redirect_reason=ineligible",
+            "did not produce an EC checkout token",
         ):
             flow._phase2_create_account()
 
-        self.assertEqual(session.graphql_calls, [])
-        self.assertEqual(session.get_calls, [])
+        # Redirect was followed (GET performed), not rejected.
+        self.assertEqual(len(session.get_calls), 1)
+        self.assertTrue(any("modxo_redirect_reason=ineligible" in str(url) for url, _ in session.get_calls))
 
     def test_datadome_and_ineligible_errors_are_not_full_flow_retryable(self):
         self.assertFalse(

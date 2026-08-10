@@ -190,17 +190,13 @@ def _roxy_language_candidates(value: object) -> list[str]:
     return out or ["en-US"]
 
 
-def _roxy_proxy_info(proxy_url: str, *, allow_noproxy: bool = True) -> dict[str, Any]:
+def _roxy_proxy_info(proxy_url: str) -> dict[str, Any]:
     """Build Roxy Local API proxyInfo.
 
-    Important: empty / unparsable proxy becomes noproxy ("本机网络"). When the
-    caller intended a real proxy, pass allow_noproxy=False to raise instead of
-    silently falling back (that mismatch is a common IP-consistency failure).
+    Empty / unparsable proxy falls back to noproxy ("本机网络") like the master.
     """
     value = (proxy_url or "").strip()
     if not value:
-        if not allow_noproxy:
-            raise RoxyFingerprintError("Roxy 需要代理，但 proxy_url 为空（会走本机网络）")
         return {
             "moduleId": 0,
             "proxyMethod": "custom",
@@ -239,10 +235,6 @@ def _roxy_proxy_info(proxy_url: str, *, allow_noproxy: bool = True) -> dict[str,
             host, port, username, password, scheme = "", None, "", "", "http"
 
     if not host or not port:
-        if not allow_noproxy:
-            raise RoxyFingerprintError(
-                f"Roxy 代理解析失败（会落到本机网络）: {_redact_proxy_url(value) or value[:80]}"
-            )
         logger.warning(
             "Roxy proxy parse failed; falling back to noproxy (本机网络). raw={}",
             _redact_proxy_url(value) or value[:80],
@@ -257,7 +249,7 @@ def _roxy_proxy_info(proxy_url: str, *, allow_noproxy: bool = True) -> dict[str,
     # Roxy Local API expects uppercase category labels.
     category = {
         "http": "HTTP",
-        "https": "HTTP",  # HTTPS proxies still use HTTP CONNECT in Roxy custom mode
+        "https": "HTTPS",
         "socks5": "SOCKS5",
         "socks5h": "SOCKS5",
         "socks4": "SOCKS4",
@@ -672,12 +664,7 @@ class RoxyApiClient:
         return workspace_id, project_id
 
     def create_profile(self, workspace_id: int, project_id: int | None) -> str:
-        intended_proxy = (self.config.proxy_url or "").strip()
-        proxy_info = _roxy_proxy_info(intended_proxy, allow_noproxy=not bool(intended_proxy))
-        if intended_proxy and str(proxy_info.get("proxyCategory") or "").lower() == "noproxy":
-            raise RoxyFingerprintError(
-                "已配置代理但 Roxy proxyInfo 仍是 noproxy（本机网络），请检查代理格式"
-            )
+        proxy_info = _roxy_proxy_info(self.config.proxy_url)
         if str(proxy_info.get("proxyCategory") or "").lower() == "noproxy":
             logger.warning(
                 "Roxy profile will use noproxy (本机网络). "
@@ -882,12 +869,6 @@ class RoxyApiClient:
                 "Roxy profile creation quota hit ({}), reusing existing profile",
                 exc,
             )
-            if (self.config.proxy_url or "").strip():
-                raise RoxyFingerprintError(
-                    "Roxy 窗口额度不足且不能复用旧窗口：当前任务配置了代理，"
-                    "复用无代理/旧代理窗口会导致本机网络出口，与协议层 IP 不一致。"
-                    "请在 Roxy 删除旧 paypal-fp 窗口后重试。"
-                )
             for p in self.list_profiles(workspace_id):
                 dir_id = (p.get("dirId") or p.get("dir_id") or "").strip()
                 if dir_id:

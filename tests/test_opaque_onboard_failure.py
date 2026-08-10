@@ -6,42 +6,6 @@ from paypal.flow import PayPalFlow
 
 
 class OpaqueOnboardFailureTests(unittest.TestCase):
-    def test_omit_null_signup_fields(self):
-        cleaned = PayPalFlow._omit_null_signup_fields(
-            {
-                "email": "a@b.com",
-                "identityDocument": None,
-                "crsData": None,
-                "legalAgreements": {},
-            }
-        )
-        self.assertEqual(cleaned, {"email": "a@b.com", "legalAgreements": {}})
-        self.assertNotIn("identityDocument", cleaned)
-        self.assertNotIn("crsData", cleaned)
-
-    def test_opaque_destructure_failure_is_retryable(self):
-        errors = [
-            {
-                "message": "Cannot destructure property 'index' of 'error' as it is undefined.",
-                "path": ["onboardAccount"],
-                "extensions": {"class": "FAILURE"},
-                "statusCode": 200,
-            }
-        ]
-        self.assertTrue(PayPalFlow._is_opaque_onboard_failure_retryable(errors))
-
-    def test_structured_card_error_is_not_opaque_retryable(self):
-        errors = [
-            {
-                "message": "R_ERROR",
-                "path": ["onboardAccount"],
-                "checkpoints": ["addCard"],
-                "errorData": {"0": {"field": "cardNumber", "code": "CARD_GENERIC_ERROR"}},
-                "extensions": {"class": "ERROR"},
-            }
-        ]
-        self.assertFalse(PayPalFlow._is_opaque_onboard_failure_retryable(errors))
-
     def test_identity_document_omitted_for_th(self):
         flow = Mock()
         flow.address = Mock(country="TH")
@@ -51,14 +15,16 @@ class OpaqueOnboardFailureTests(unittest.TestCase):
         result = PayPalFlow._identity_document_payload(flow)
         self.assertIsNone(result)
 
-
-
-    def test_dob_payload_never_empty(self):
+    def test_dob_payload_matches_master_behavior(self):
+        # Master: valid dob -> full dict; malformed/missing dob -> empty dict (no default).
         flow = Mock()
+        flow.user = Mock(dob="15/06/1990")
+        payload = PayPalFlow._dob_payload(flow)
+        self.assertEqual(payload, {"day": "15", "month": "06", "year": "1990"})
+
         flow.user = Mock(dob="")
         payload = PayPalFlow._dob_payload(flow)
-        self.assertEqual(set(payload), {"day", "month", "year"})
-        self.assertTrue(all(payload.values()))
+        self.assertEqual(payload, {})
 
     def test_diag_write_json_writes_somewhere(self):
         written = PayPalFlow._diag_write_json(

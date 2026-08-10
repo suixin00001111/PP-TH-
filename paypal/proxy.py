@@ -148,18 +148,15 @@ class ProxyEntry:
 
     @property
     def url(self) -> str:
-        if self.username:
-            user = quote(self.username, safe="")
-            password = quote(self.password, safe="")
-            auth = f"{user}:{password}@"
-        else:
-            auth = ""
+        user = quote(self.username, safe="")
+        password = quote(self.password, safe="")
+        auth = f"{user}:{password}@" if self.username or self.password else ""
         return f"{self.scheme}://{auth}{self.host}:{self.port}"
 
     @property
     def label(self) -> str:
-        if self.username:
-            return f"{self.scheme}://{self.username}:***@{self.host}:{self.port}"
+        if self.username or self.password:
+            return f"{self.scheme}://{self.username or ''}:***@{self.host}:{self.port}"
         return f"{self.scheme}://{self.host}:{self.port}"
 
     def with_scheme(self, scheme: str) -> "ProxyEntry":
@@ -402,51 +399,54 @@ def resolve_working_proxy_entry(
 
 
 
-def get_system_proxy_entry() -> ProxyEntry | None:
-    """Detect local system / client mixed proxy (Clash 系统代理等).
+def _local_proxy_port_candidates() -> list[tuple[str, int, str]]:
+    """Common local client ports (Clash / V2 / proxy_bridge). Order = preference."""
+    return [
+        ("127.0.0.1", 7897, "http"),
+        ("127.0.0.1", 7890, "http"),
+        ("127.0.0.1", 7891, "http"),
+        # proxy_bridge / residual SOCKS on servers often listens 10808
+        ("127.0.0.1", 10808, "socks5h"),
+        ("127.0.0.1", 10808, "http"),
+        ("127.0.0.1", 10809, "http"),
+        ("127.0.0.1", 10809, "socks5h"),
+        ("127.0.0.1", 1080, "socks5h"),
+        ("127.0.0.1", 20171, "http"),
+        ("127.0.0.1", 6152, "http"),
+    ]
 
-    Brazil-style runs usually go out via OS/client proxy or TUN. Our multi-country
-    web previously forced a direct connection to the filled residential URL and
-    scrubbed env, so cliproxy saw the raw China IP and returned forbidden.
-    """
+
+def _iter_system_proxy_candidates() -> list[ProxyEntry]:
+    """All plausible local/system proxy entries (do not stop at first open port)."""
     import socket
 
-    candidates: list[str] = []
+    raw_candidates: list[str] = []
 
     # 1) Windows Internet Settings (系统代理)
     try:
         system_url = _read_windows_system_proxy()
         if system_url:
-            candidates.append(system_url)
+            raw_candidates.append(system_url)
     except Exception:
         pass
 
     # 2) Environment (if client exported HTTP_PROXY)
     env_url = _env_proxy_url()
     if env_url:
-        # Prefer local loopback env proxies; skip remote env that might be stale
-        candidates.append(env_url)
+        raw_candidates.append(env_url)
 
-    # 3) Common local client ports
-    for host, port, scheme in (
-        ("127.0.0.1", 7897, "http"),
-        ("127.0.0.1", 7890, "http"),
-        ("127.0.0.1", 7891, "http"),
-        ("127.0.0.1", 10809, "http"),
-        ("127.0.0.1", 10808, "http"),
-        ("127.0.0.1", 1080, "socks5h"),
-        ("127.0.0.1", 20171, "http"),
-        ("127.0.0.1", 6152, "http"),
-    ):
+    # 3) Common local client ports (probe open only)
+    for host, port, scheme in _local_proxy_port_candidates():
         try:
             sock = socket.create_connection((host, port), timeout=0.25)
             sock.close()
-            candidates.append(f"{scheme}://{host}:{port}")
+            raw_candidates.append(f"{scheme}://{host}:{port}")
         except Exception:
             continue
 
+    entries: list[ProxyEntry] = []
     seen: set[str] = set()
-    for raw in candidates:
+    for raw in raw_candidates:
         raw = (raw or "").strip()
         if not raw or raw in seen:
             continue
@@ -455,7 +455,6 @@ def get_system_proxy_entry() -> ProxyEntry | None:
             entry = ProxyEntry.parse(raw if "://" in raw else f"http://{raw}")
         except Exception:
             try:
-                # host:port
                 if raw.count(":") == 1:
                     host, port_s = raw.split(":", 1)
                     entry = ProxyEntry(host=host.strip(), port=int(port_s), scheme="http")
@@ -463,18 +462,32 @@ def get_system_proxy_entry() -> ProxyEntry | None:
                     continue
             except Exception:
                 continue
-        # Only accept loopback / explicit local system proxies here
         host_l = (entry.host or "").lower()
         if host_l in {"127.0.0.1", "localhost", "::1"} or host_l.startswith("127."):
-            return entry
-    # Non-loopback Windows proxy (rare) still usable
-    try:
-        system_url = _read_windows_system_proxy()
-        if system_url:
-            return ProxyEntry.parse(system_url if "://" in system_url else f"http://{system_url}")
-    except Exception:
-        pass
-    return None
+            entries.append(entry)
+            continue
+        # Non-loopback Windows proxy (rare) still usable — keep at end
+        entries.append(entry)
+    return entries
+
+
+def get_system_proxy_entry() -> ProxyEntry | None:
+    """Detect local system / client mixed proxy (Clash 系统代理等).
+
+    Brazil-style runs usually go out via OS/client proxy or TUN. Our multi-country
+    web previously forced a direct connection to the filled residential URL and
+    scrubbed env, so cliproxy saw the raw China IP and returned forbidden.
+
+    Returns the first candidate only (compat). Prefer list_system_proxy_entries /
+    resolve_outbound_proxy which probe every candidate.
+    """
+    entries = _iter_system_proxy_candidates()
+    return entries[0] if entries else None
+
+
+def list_system_proxy_entries() -> list[ProxyEntry]:
+    """All local/system proxy candidates (open ports + env + Windows settings)."""
+    return _iter_system_proxy_candidates()
 
 
 
@@ -492,16 +505,6 @@ def _windows_system_proxy_enabled() -> bool:
         return False
 
 
-def _probe_ca_path() -> str:
-    """ASCII-safe CA path for curl_cffi probes (Windows Chinese usernames)."""
-    try:
-        from paypal.ssl_env import ensure_ssl_cert_env
-
-        return str(ensure_ssl_cert_env() or "").strip()
-    except Exception:
-        return ""
-
-
 def probe_proxy_entry(
     entry: ProxyEntry,
     *,
@@ -513,17 +516,13 @@ def probe_proxy_entry(
 
     proxy_url = entry.url
     errors: list[str] = []
-    ca_path = _probe_ca_path()
 
     # 1) curl_cffi (primary for PayPal path)
     try:
         from curl_cffi import requests as curl_requests
 
         started = time.time()
-        session_kwargs: dict = {"timeout": timeout, "impersonate": "chrome131"}
-        if ca_path:
-            session_kwargs["verify"] = ca_path
-        with curl_requests.Session(**session_kwargs) as client:
+        with curl_requests.Session(timeout=timeout, impersonate="chrome131") as client:
             if hasattr(client, "trust_env"):
                 client.trust_env = False
             client.proxies = {"http": proxy_url, "https": proxy_url}
@@ -548,10 +547,7 @@ def probe_proxy_entry(
         import httpx
 
         started = time.time()
-        client_kwargs: dict = {"proxy": proxy_url, "timeout": timeout, "trust_env": False}
-        if ca_path:
-            client_kwargs["verify"] = ca_path
-        with httpx.Client(**client_kwargs) as client:
+        with httpx.Client(proxy=proxy_url, timeout=timeout, trust_env=False) as client:
             resp = client.get(test_url)
             status = int(resp.status_code)
             body = (resp.text or "")[:300]
@@ -577,7 +573,6 @@ def probe_proxy_entry(
             test_url,
             proxies={"http": proxy_url, "https": proxy_url},
             timeout=timeout,
-            verify=ca_path or True,
         )
         status = int(resp.status_code)
         body = (resp.text or "")[:300]
@@ -597,39 +592,71 @@ def probe_proxy_entry(
     raise ValueError(" | ".join(errors[-3:]) if errors else "probe failed")
 
 
+def probe_direct_exit(*, timeout: float = 12.0) -> tuple[str, int]:
+    """Probe direct (no app-level proxy) HTTPS exit IP."""
+    import time
+
+    test_url = "https://api.ipify.org?format=json"
+    errors: list[str] = []
+    try:
+        from curl_cffi import requests as curl_requests
+
+        started = time.time()
+        with curl_requests.Session(timeout=timeout, impersonate="chrome131") as client:
+            if hasattr(client, "trust_env"):
+                client.trust_env = False
+            resp = client.get(test_url)
+            status = int(getattr(resp, "status_code", 0) or 0)
+            if status < 200 or status >= 400:
+                raise ValueError(f"HTTP {status}")
+            try:
+                exit_ip = str((resp.json() or {}).get("ip") or "").strip()
+            except Exception:
+                exit_ip = (getattr(resp, "text", None) or "")[:64].strip()
+            return exit_ip, int((time.time() - started) * 1000)
+    except Exception as exc:
+        errors.append(f"curl_cffi: {exc}")
+    try:
+        import httpx
+
+        started = time.time()
+        with httpx.Client(timeout=timeout, trust_env=False) as client:
+            resp = client.get(test_url)
+            if resp.status_code < 200 or resp.status_code >= 400:
+                raise ValueError(f"HTTP {resp.status_code}")
+            try:
+                exit_ip = str((resp.json() or {}).get("ip") or "").strip()
+            except Exception:
+                exit_ip = (resp.text or "")[:64].strip()
+            return exit_ip, int((time.time() - started) * 1000)
+    except Exception as exc:
+        errors.append(f"httpx: {exc}")
+    raise ValueError(" | ".join(errors[-2:]) if errors else "direct probe failed")
+
+
 def resolve_outbound_proxy(
     filled_raw: str | None = None,
     *,
     allow_system_fallback: bool = True,
-    require_proxy: bool = True,
+    allow_direct_fallback: bool = True,
     timeout: float = 12.0,
 ) -> tuple[ProxyEntry | None, str, int, str]:
-    """Resolve outbound proxy for a job.
+    """Resolve outbound proxy (master semantics: filled proxy wins).
 
     Strategy:
-      1) User-filled residential / custom URL first (explicit intent wins).
-      2) Working local/system proxy (Clash 系统代理 / 常见本地端口) as soft assist
-         — only when a proxy is required or system-proxy assist is enabled.
-      3) If nothing works:
-           - require_proxy=True  -> raise with actionable Chinese error
-           - require_proxy=False -> return (None, "", 0, "direct") so the job can
-             continue on the machine's default network path (TUN/direct).
+      - User-filled residential/custom proxy is tried FIRST (what you fill is
+        what you use, matching the openai-paypal master).
+      - Local/system proxies are tried next (every open candidate, not just first).
+      - If nothing was filled and proxies fail, fall back to **direct** when the
+        server/machine can reach the public internet (Linux VPS common case).
 
     Returns (entry|None, exit_ip, latency_ms, note).
+    entry is None means direct (no application-level proxy).
     """
     filled_raw = (filled_raw or "").strip()
     notes: list[str] = []
     filled_entry: ProxyEntry | None = None
-
-    # Respect PAYPAL_USE_SYSTEM_PROXY / config.USE_SYSTEM_PROXY: when user did not
-    # fill a proxy and did not require one, skip probing half-broken local ports
-    # (saves many seconds of SSL timeouts on Clash "系统代理" without TUN).
-    use_system_cfg = parse_bool(os.getenv("PAYPAL_USE_SYSTEM_PROXY"), _CFG_USE_SYSTEM_PROXY)
-    want_system = bool(allow_system_fallback) and (
-        bool(require_proxy) or bool(filled_raw) or bool(use_system_cfg)
-    )
-    system_entry = get_system_proxy_entry() if want_system else None
-    system_on = _windows_system_proxy_enabled() if want_system else False
+    system_entries = list_system_proxy_entries() if allow_system_fallback else []
 
     def _try_entry(entry: ProxyEntry, tag: str) -> tuple[ProxyEntry, str, int, str] | None:
         try:
@@ -647,12 +674,7 @@ def resolve_outbound_proxy(
             notes.append(f"{tag}: {exc}")
             return None
 
-    # Fast path: no proxy requested and system assist off → direct immediately.
-    if not filled_raw and not require_proxy and not want_system:
-        return None, "", 0, "direct"
-
-    # 1) User-filled residential / custom first — explicit form input must win
-    # over a half-broken Windows "系统代理" that only opens a local port.
+    # 1) User-filled residential / custom first (master: fill what you use)
     if filled_raw:
         try:
             filled_entry = ProxyEntry.parse(filled_raw)
@@ -667,38 +689,48 @@ def resolve_outbound_proxy(
                     tag = f"filled-auto-{working.scheme}"
                 return working, exit_ip, latency_ms, tag
 
-    # 2) System / local client proxy (only when it actually completes HTTPS)
-    if system_entry is not None:
-        tag = f"system-first:{system_entry.label}" if system_on else f"system-fallback:{system_entry.label}"
-        hit = _try_entry(system_entry, tag)
+    # 2) System / local proxy fallback — try ALL candidates (10809 may be dead
+    # while 10808 socks works, or vice versa)
+    for system_entry in system_entries:
+        hit = _try_entry(system_entry, f"system-fallback:{system_entry.label}")
         if hit:
             return hit
 
-    # 3) Optional direct path — do not hard-fail jobs that never asked for a proxy
-    if not require_proxy:
-        detail = " | ".join(notes[-3:]) if notes else "no proxy requested"
-        return None, "", 0, f"direct ({detail})" if notes else "direct"
+    # 3) Direct fallback when user did not require a specific proxy
+    # (empty form on a VPS that already has clean public egress).
+    if allow_direct_fallback and not filled_raw:
+        try:
+            exit_ip, latency_ms = probe_direct_exit(timeout=timeout)
+            return None, exit_ip, latency_ms, "direct"
+        except Exception as exc:
+            notes.append(f"direct: {exc}")
 
     # Compose actionable error (Chinese)
+    system_entry = system_entries[0] if system_entries else None
     parts = [
-        "出网探测失败（已尝试：填写代理 → 系统/本地代理）。",
+        "出网探测失败（已按巴西用法尝试：系统代理/填写代理"
+        + ("/直连" if allow_direct_fallback and not filled_raw else "")
+        + "）。",
     ]
     if filled_raw:
         parts.append(
-            "填写的住宅代理不可用：请检查账号/白名单/节点；"
-            "cliproxy 常见报错 forbidden ip not supported（需加白本机公网 IP 或开 TUN）。"
+            "填写的住宅代理：当前公网 IP 常被 cliproxy 拒绝（forbidden ip not supported）；"
+            "关 TUN 直连节点会被拒，这与 socks5/http 写法无关。"
         )
-    if system_entry is not None:
+    if system_entries:
+        labels = ", ".join(e.label for e in system_entries[:4])
         parts.append(
-            f"系统代理已检测到 {system_entry.label}，但当前无法完成 HTTPS 出网"
-            "（常见：只开了系统代理开关、未开 TUN，或客户端无可用节点）。"
+            f"系统/本地代理已检测到 [{labels}]，但当前无法完成 HTTPS 出网"
+            "（常见：只开了系统代理开关、未开 TUN，或本地桥接端口是残留死连接）。"
+            "巴西项目能跑，多半是开了 TUN/虚拟网卡，流量在系统层已出网。"
         )
     else:
-        parts.append("未检测到可用的本地系统代理（Clash 系统代理未开或端口未监听）。")
+        parts.append("未检测到本地系统代理（Clash 系统代理未开或端口未监听）。")
     parts.append(
-        "可行处理：1) 在 Web 填写可用住宅代理并点「测试代理」；"
-        "2) 打开客户端 TUN/虚拟网卡后再跑；"
-        "3) 若本机已能直连外网，可关闭代理开关用直连（仅调试；真机 BA 仍建议目标国出口）。"
+        "可行处理：1) 打开客户端 TUN/虚拟网卡后再跑（可清空代理框，与巴西一致）；"
+        "2) 或在 cliproxy 后台把本机公网 IP 加白名单后关 TUN 用填写代理；"
+        "3) 系统代理模式需客户端本身已能浏览器正常上网；"
+        "4) 服务器直连可用时，请清空代理框并关闭「强制系统代理」。"
     )
     detail = " | ".join(notes[-4:])
     if detail:
@@ -820,20 +852,18 @@ def _env_proxy_url() -> str | None:
 
 
 def load_proxy_pool() -> list[str]:
-    """Load proxy lines: PAYPAL_PROXY_POOL > PAYPAL_PROXY_URL > optional system > config."""
-    env_pool = _split_pool(os.getenv("PAYPAL_PROXY_POOL", ""))
+    """Load proxy lines (master behavior): PAYPAL_PROXY_URL > PAYPAL_PROXY_POOL > config.PROXY_POOL.
+
+    Explicit env takes priority; system-proxy fallback is intentionally removed
+    so an unconfigured pool never silently falls back to local network.
+    """
+    env_url = _load_dotenv_value("PAYPAL_PROXY_URL")
+    if env_url:
+        return [env_url]
+
+    env_pool = _split_pool(_load_dotenv_value("PAYPAL_PROXY_POOL"))
     if env_pool:
         return env_pool
-
-    explicit = (os.getenv("PAYPAL_PROXY_URL") or "").strip()
-    if explicit:
-        return [explicit]
-
-    use_system = parse_bool(os.getenv("PAYPAL_USE_SYSTEM_PROXY"), _CFG_USE_SYSTEM_PROXY)
-    if use_system:
-        system_proxy = _env_proxy_url() or _read_windows_system_proxy()
-        if system_proxy:
-            return [system_proxy]
 
     return [line.strip() for line in PROXY_POOL if str(line).strip()]
 
@@ -857,19 +887,24 @@ def build_proxy_config(
     raw: str | None = None,
     proxy_url: str | None = None,
 ) -> ProxyConfig:
-    """Return a selected proxy config.
+    """Return a selected proxy config (master semantics).
 
-    enabled=None means use config/env default. If disabled, no proxy is selected.
-    raw / proxy_url: optional user-provided proxy string. When non-empty, it wins.
+    enabled=None means use config/env default.  If explicitly disabled, no proxy
+    is selected — even when a custom proxy string is provided.
+    raw / proxy_url: optional user-provided proxy string. When enabled is None,
+    providing a custom proxy implicitly enables it; otherwise the pool is used.
     """
-    raw_value = (raw or proxy_url or "").strip()
-    if raw_value:
-        return ProxyConfig(enabled=True, entry=ProxyEntry.parse(raw_value))
-
+    custom_proxy = (raw or proxy_url or "").strip()
     if enabled is None:
-        should_enable = parse_bool(os.getenv("PAYPAL_PROXY_ENABLED"), PROXY_ENABLED)
+        # Env can override the default at process startup without code changes.
+        should_enable = bool(custom_proxy) or parse_bool(
+            _load_dotenv_value("PAYPAL_PROXY_ENABLED"), PROXY_ENABLED
+        )
     else:
+        # Explicit CLI/API choices must win so the proxy can be toggled dynamically.
         should_enable = bool(enabled)
     if not should_enable:
         return ProxyConfig(enabled=False)
+    if custom_proxy:
+        return ProxyConfig(enabled=True, entry=ProxyEntry.parse(custom_proxy))
     return ProxyConfig(enabled=True, entry=choose_proxy_entry(index=index))

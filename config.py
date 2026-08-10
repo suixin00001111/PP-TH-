@@ -27,31 +27,36 @@ PROXY_POOL: list[str] = []
 
 # Scenario profile: test | real
 # test  -> protocol smoke (Phase0/1 path finding)
-# real  -> browser-capable defaults (auto/headless/roxy)
+# real  -> browser-capable defaults (headless, aligned with openai-paypal)
 RUN_PROFILE = "real"
 
 # Coarse runtime: protocol | headless | auto | roxy
-# real profile default is auto (Roxy if key present else headless)
-RUNTIME_MODE = "protocol"
+# real profile default is headless (母版能跑通路径；需 Playwright)
+RUNTIME_MODE = "headless"
 
 # Fine risk modes (openai-paypal compatible).
 # When RUNTIME_MODE is set, runtime_config maps coarse->fine unless env overrides.
-# 风控三项（对齐巴西公开包 paypal-pay-public-nocdk，默认纯协议）：
-#   浏览器指纹来源 = random（程序合成，不弹浏览器）
-#   DataDome 模式   = protocol（协议边缘 / cookie 续跑）
-#   MTR sealedResult = python_generated（模板生成，不跑浏览器 dfp.js）
-# Web UI 固定这三项；CLI 仍可通过 env 覆盖 headless/roxy（高级）。
-FINGERPRINT_SOURCE = "random"
-DATADOME_MODE = "protocol"
+# 浏览器指纹来源（巴西 openai-paypal 同款）：
+#   random   = 程序内合成 UA/canvas/WebGL 等（纯协议，不弹浏览器）
+#   headless = 本机 Playwright 读真实 runtime（推荐，母版可跑通）
+#   roxy     = Roxy 指纹浏览器读真实 runtime
+FINGERPRINT_SOURCE = "headless"
+# DataDome：
+#   protocol = 协议边缘模拟（纯协议）
+#   headless / roxy = 浏览器执行 challenge
+DATADOME_MODE = "headless"
 DATADOME_ROXY_WAIT_SECONDS = 12.0
 DATADOME_HEADLESS_WAIT_SECONDS = 14.0
-MTR_RUNTIME_MODE = "python_generated"
+# MTR sealedResult：
+#   python_generated = 程序模板生成（纯协议）
+#   headless / roxy = 浏览器执行 dfp.js
+MTR_RUNTIME_MODE = "headless"
 MTR_ROXY_WAIT_SECONDS = 20.0
 MTR_HEADLESS_WAIT_SECONDS = 20.0
 MTR_CHANNEL = "iwc-mxo"
 MTR_API_KEY = ""
-# 风控信号：与上三项配套，纯协议默认 protocol
-RISK_SIGNALS_MODE = "protocol"
+# 风控信号：signup 前默认走 headless（_signup_context_risk_mode 也会强制 roxy/headless）
+RISK_SIGNALS_MODE = "headless"
 RISK_ROXY_WAIT_SECONDS = 18.0
 RISK_HEADLESS_WAIT_SECONDS = 12.0
 

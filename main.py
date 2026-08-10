@@ -6,10 +6,6 @@ import sys
 from pathlib import Path
 from loguru import logger
 
-from paypal.ssl_env import ensure_ssl_cert_env
-
-ensure_ssl_cert_env()
-
 from paypal.oaipy_data import generate_user, generate_card, generate_address
 from paypal.regions import normalize_region
 from paypal.flow import PayPalFlow
@@ -21,11 +17,14 @@ from paypal.runtime_bridge import build_otp_provider
 
 
 def main():
-    parser = argparse.ArgumentParser(description="PayPal BA multi-country (Brazil-depth protocol)")
+    parser = argparse.ArgumentParser(
+        description="PayPal BA multi-country (母版 headless 默认可跑通 + 多国协议)"
+    )
     parser.add_argument("--ba-token", required=True)
     parser.add_argument("--phone", required=True)
     parser.add_argument("--country", default="TH")
     parser.add_argument("--profile", default="real", choices=["test", "real"])
+    # default None -> resolve_and_apply uses config RUNTIME_MODE=headless
     parser.add_argument("--runtime", default=None, choices=["protocol", "headless", "auto", "roxy"])
     parser.add_argument("--fingerprint-source", default=None)
     parser.add_argument("--datadome-mode", default=None)
@@ -34,6 +33,9 @@ def main():
     parser.add_argument("--smsbower", action="store_true")
     parser.add_argument("--smsbower-api-key", default=None)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--buyer-mode", default="legacy",
+                        help="Buyer identity mode: legacy (Phase4 binds buyer) or "
+                             "elevate_bind / identity_elevation (elevate Guest, bind EC, authorize)")
     parser.add_argument("--max-card-attempts", type=int, default=5)
     parser.add_argument("--max-flow-attempts", type=int, default=1)
     proxy_group = parser.add_mutually_exclusive_group()
@@ -96,6 +98,7 @@ def main():
         sms_provider=sms_provider,
         smsbower_enabled=bool(args.smsbower) or None,
         smsbower_api_key=args.smsbower_api_key,
+        buyer_identity_mode=args.buyer_mode,
         continue_merchant=False,
     )
 

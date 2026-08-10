@@ -113,17 +113,17 @@ def map_coarse_to_fine(coarse: str) -> dict[str, str]:
 
 
 def profile_defaults(profile: str) -> dict[str, Any]:
-    """Scenario defaults: test/real both local-protocol by default; override for headless/roxy."""
+    """Scenario defaults: test=protocol smoke; real=headless (母版可跑通路径)."""
     if profile == "test":
         return {
             "runtime_mode": "protocol",
             "continue_merchant": False,
             "traffic_record": False,
         }
-    # real: keep peer-aligned local protocol defaults (no Roxy required).
-    # Explicit --runtime headless/roxy or env overrides still work.
+    # real: headless by default (aligned with openai-paypal runnable path).
+    # Explicit --runtime protocol/roxy or env overrides still work.
     return {
-        "runtime_mode": "protocol",
+        "runtime_mode": "headless",
         "continue_merchant": False,
         "traffic_record": False,
     }
