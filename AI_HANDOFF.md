@@ -11,7 +11,8 @@
 > 5) Server `deploy/install.sh` seeds **pure-protocol** `.env` defaults  
 > 6) Windows TLS CA mirror + proxy `require_proxy` only when user filled a proxy  
 > **Language:** English for machine clarity; product UI/logs often Chinese.  
-> Describe this repo on its own terms only.
+> Describe this repo on its own terms only.  
+> **Community (human support):** QQ group **`1098798456`** — usage / deploy / proxy troubleshooting; never paste live secrets.
 
 Read this **before** changing flow, proxy, session, elevation, address generation, or web job ownership.
 

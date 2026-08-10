@@ -124,3 +124,10 @@ $env:PAYPAL_ONLINE_ADDRESS = "0"
 | 升权未生效 | `buyer_identity_mode=elevate_bind`，日志含 elevate / Buyer |
 
 协议链路：[PROTOCOL_CHAIN.md](./PROTOCOL_CHAIN.md) · 总览：[README.md](./README.md) · 交接：[HANDOFF.md](./HANDOFF.md)
+
+---
+
+## 10. 交流群
+
+安装、代理、Headless / 升权等排障，可进 **QQ 交流群 `1098798456`** 一起沟通。  
+提问时尽量带：运行环境、国家、报错原文（**打码密钥与代理**）。详见 [README.md](./README.md)「交流与协作」。

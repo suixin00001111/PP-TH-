@@ -15,6 +15,7 @@
 - 支持国家：**44**（`GET /api/regions` / `list_regions_public()`）
 - 核心设计：选中国家后绑定该国 `ProtocolContext`；姓名/城市/街道/邮编/区号**必须对应该国**
 - 现行能力：`elevate_bind` 升权、OSM 在线地址、44 国 `ADDRESS_POOLS`；Web 风控三项**可选**
+- **交流群**：QQ **`1098798456`**（用法与排障即时沟通；密钥/代理务必打码）
 
 ### 核心概念
 
@@ -204,5 +205,6 @@ python -m compileall -q paypal web.py main.py config.py
 | Online address | `online_address.py`、`PAYPAL_ONLINE_ADDRESS` |
 | Address pools | 44 国 curated 池 |
 | 文档 | 全量 md 与现行行为对齐 |
+| 交流群 | QQ **`1098798456`**（README / SETUP / UI 页脚） |
 
 入口：`README.md` · `SETUP.md` · `PROTOCOL_CHAIN.md` · `PROXY.md` · `DEPLOY.md` · `AI_HANDOFF.md`。
