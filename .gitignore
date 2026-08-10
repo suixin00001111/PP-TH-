@@ -33,3 +33,8 @@ debug/
 
 runtime/
 
+
+# online address cache
+data/runtime_address_cache.json
+data/runtime_address_cache.json.tmp
+

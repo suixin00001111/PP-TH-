@@ -508,8 +508,37 @@ def re_fullmatch_th(local: str) -> bool:
     return bool(local) and local[0] in "689" and local.isdigit() and len(local) == 9
 
 
-def generate_address(country: str = DEFAULT_REGION) -> BillingAddress:
+def generate_address(
+    country: str = DEFAULT_REGION,
+    *,
+    prefer_online: bool | None = None,
+    force_online_refresh: bool = False,
+) -> BillingAddress:
+    """Generate billing address for country.
+
+    Order:
+      1) Online OSM address (Nominatim/Overpass) when PAYPAL_ONLINE_ADDRESS!=0
+      2) Local curated pools / Faker fallback
+    """
     code = normalize_region(country)
+    try:
+        from paypal.online_address import try_resolve_online_address, online_address_enabled
+        use_online = online_address_enabled(prefer_online)
+        if use_online:
+            online = try_resolve_online_address(
+                code,
+                enabled=True,
+                force_refresh=force_online_refresh,
+            )
+            if online is not None:
+                online.country = code
+                return online
+    except Exception as exc:
+        try:
+            from loguru import logger
+            logger.debug("online address path skipped: {}", exc)
+        except Exception:
+            pass
     try:
         from paypal.country_profiles import generate_address_dict, ADDRESS_POOLS
         if code in ADDRESS_POOLS:
