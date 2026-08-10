@@ -17,18 +17,31 @@ UI country=TH
 
 ```text
 main.py / web.py
-  → generate_user/card/address (TH pools)
-  → PayPalFlow.run()
+  → generate_user/card/address
+       address: OSM online (optional) → ADDRESS_POOLS[country] → Faker
+  → PayPalFlow.run()  或  IdentityElevationPayPalFlow.run()  (buyer_identity_mode)
       Phase0: GET /agreements/approve?ba_token=BA-...
               follow redirects, extract ssrt / cookies / DataDome 判定
-      Phase1: FraudNet fn_sync + Tealeaf + analytics (tz +420)
+      Phase1: FraudNet fn_sync + Tealeaf + analytics (tz 按所选国)
       Phase2: ModXO Server Action create-account → EC token / signup URL
-      Phase3: GriffinMetadata(TH/th)
-              InitiateRiskBasedTwoFactorPhoneConfirmation (+66)
+      Phase3: GriffinMetadata(country/lang)
+              InitiateRiskBasedTwoFactorPhoneConfirmation (+cc)
               ConfirmRiskBasedTwoFactorPhoneConfirmation (OTP)
-              SignUpNewMemberMutation (country=TH, identityDocument=null)
+              SignUpNewMemberMutation (country=选中国, BR 可带 CPF)
       Phase4: AuthorizeBillingAgreement → return_url / BA id
+              · legacy：Hagrid 上下文绑定 buyer
+              · elevate_bind：_elevate_guest_identity → _bind_buyer_to_current_ec
+                → authorize（可 skip_initial_hagrid）
 ```
+
+### 1.1 买家身份模式
+
+| mode | 入口 | 行为 |
+|------|------|------|
+| `legacy` | 默认 | Phase4 由 review/Hagrid 绑定 buyer |
+| `elevate_bind`（别名 `identity_elevation` 等） | Web 下拉 / `--buyer-mode` / API | `paypal/elevation_flow.py`：严格 EC 门控 + Guest 升权 + 绑 EC 后再授权 |
+
+Web 选择 `elevate_bind` 时使用 `WebElevationPayPalFlow`（OTP 适配 + 升权）。
 
 ## 2. 关键 GraphQL / HTTP
 

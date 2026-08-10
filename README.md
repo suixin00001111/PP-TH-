@@ -41,6 +41,11 @@ Web 下拉与 `GET /api/regions` 一致，包括：
 - 非拉丁脚本经 [Unidecode](https://pypi.org/project/Unidecode/) 转写，便于表单字段
 - `address.country` 与所选协议国家强制一致
 - 手机号输入框 **placeholder 仅为示例**；用户填写后显示完整号码
+- **地址优先级**（`generate_address`）：
+  1. **在线 OSM**（Nominatim → Overpass，带本地缓存）— 环境变量 `PAYPAL_ONLINE_ADDRESS=1`（默认开启）
+  2. **本地 `ADDRESS_POOLS`** — 44 国均有 curated 池（含 MY/PH/NZ/ES/IT/…/PE 等，避免 Faker 垃圾占位）
+  3. Faker 兜底（仅无池时）
+- 关闭在线地址：`PAYPAL_ONLINE_ADDRESS=0`（离线/CI/弱网冒烟推荐）
 
 ---
 
@@ -48,9 +53,18 @@ Web 下拉与 `GET /api/regions` 一致，包括：
 
 **A 层（PayPal BA）**：Phase0 协议页 → Phase1 指纹/Tealeaf → Phase2 ModXO/EC → Phase3 OTP → Phase4 授权
 
-**B/C 层**：pm-redirects / pay.openai → SetupIntent → checkout/verify
+**买家身份模式**（Web 下拉 / CLI `--buyer-mode` / API `buyer_identity_mode`）：
 
-**控制台**：国家下拉、代理填写与测试、OTP 交互、任务日志、CLI
+| 值 | 说明 |
+|----|------|
+| `legacy` | 原版：Phase4 由 Hagrid 上下文绑定 buyer |
+| `elevate_bind` | 注册后升 Guest → 绑 EC → 再授权（别名：`identity_elevation` / `elevate` / `v2` 等） |
+
+升权实现：`paypal/elevation_flow.py` → `IdentityElevationPayPalFlow`（Web 走 `WebElevationPayPalFlow`）。
+
+**B/C 层**：pm-redirects / pay.openai → SetupIntent → checkout/verify（默认关）
+
+**控制台**：国家下拉、买家模式、代理填写与测试、OTP 交互、任务日志、CLI
 
 ---
 
@@ -89,13 +103,16 @@ Windows:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --country JP --ba-token BA-xxx --phone +819012345678 --proxy
+.\.venv\Scripts\python.exe main.py --country BR --ba-token BA-xxx --phone +5511... --buyer-mode elevate_bind --runtime protocol
 ```
 
 | 参数 | 说明 |
 |------|------|
 | `--ba-token` | BA token（必填） |
-| `--phone` | 带国际区号手机号（必填） |
+| `--phone` | 带国际区号手机号（必填，区号须匹配 `--country`） |
 | `--country` | 协议国家，默认 `TH` |
+| `--buyer-mode` | `legacy`（默认）或 `elevate_bind` / `identity_elevation` |
+| `--runtime` | `protocol` / `headless` / `auto` / `roxy` |
 | `--proxy` / `--no-proxy` | 开/关代理 |
 | `--debug` | 调试日志 |
 | `--max-card-attempts` | 绑卡重试次数 |
@@ -108,24 +125,32 @@ Windows:
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/regions` | 国家列表 |
+| GET | `/api/runtime` | 默认运行时 + 买家模式枚举 |
 | GET | `/api/jobs` | 任务列表 |
 | POST | `/api/jobs` | 创建任务 |
 | GET | `/api/jobs/{id}` | 任务详情 |
 | POST | `/api/jobs/{id}/otp` | 提交 OTP |
 | POST | `/api/proxy/test` | 测试代理 |
 
-创建任务示例：
+创建任务示例（升权 + 巴西）：
 
 ```json
 {
   "ba_token": "BA-xxxxxxxxxxxxxxxxx",
-  "phone": "+819012345678",
-  "country": "JP",
+  "phone": "+5511987654321",
+  "country": "BR",
   "proxy_enabled": true,
   "proxy": "host:port:username:password",
-  "max_card_attempts": 5
+  "buyer_identity_mode": "elevate_bind",
+  "fingerprint_source": "random",
+  "datadome_mode": "protocol",
+  "mtr_runtime": "python_generated",
+  "max_card_attempts": 5,
+  "max_flow_attempts": 1
 }
 ```
+
+注意：`phone` 的国际区号必须与 `country` 一致，否则创建任务会 **400**。
 
 ---
 
@@ -136,18 +161,21 @@ PP-TH-/
 ├── config.py / main.py / web.py / start.bat / start.sh
 ├── requirements.txt
 ├── paypal/
-│   ├── flow.py          # 状态机 + 各国 ProtocolContext
-│   ├── protocol.py      # 国家协议上下文（TH 为参考衍生）
-│   ├── regions.py       # 国家档案
-│   ├── oaipy_data.py    # Faker 多国资料
+│   ├── flow.py              # 状态机 + 各国 ProtocolContext
+│   ├── elevation_flow.py    # 升权模式 IdentityElevationPayPalFlow
+│   ├── online_address.py    # OSM Nominatim/Overpass 在线地址
+│   ├── country_profiles.py  # 44 国 ADDRESS_POOLS / 卡 BIN / 电话规则
+│   ├── protocol.py          # 国家协议上下文（TH 为参考衍生）
+│   ├── regions.py           # 国家档案
+│   ├── oaipy_data.py        # Faker + 地址路由（在线→池→兜底）
 │   ├── session.py / proxy.py / proxy_bridge.py
 │   ├── fingerprint.py / local_headless.py / tealeaf.py
 │   ├── analytics.py / graphql.py / mtr.py
 │   └── merchant_complete.py / b_layer_handoff.py
 ├── web_static/
 ├── tests/
-├── PROXY.md / SETUP.md / PROTOCOL_CHAIN.md
-├── REVERSE_NOTES.md / SANITIZATION.md
+├── PROXY.md / SETUP.md / PROTOCOL_CHAIN.md / HANDOFF.md
+├── DEPLOY.md / REVERSE_NOTES.md / SANITIZATION.md
 └── README.md
 ```
 
@@ -172,10 +200,15 @@ socks5h://user:pass@host:port
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+# 弱网/离线冒烟可关在线地址，避免 OSM 超时拖慢
+$env:PAYPAL_ONLINE_ADDRESS = "0"
 ```
 
-- 假 BA：Phase 0/1 通常可过；Phase 2 预期因无 EC 失败
-- 完整 OTP 需真实 BA + 该国号码（建议该国出口代理）
+关键套件：`test_buyer_identity_mode`、`test_online_address`、`test_country_profiles_fidelity`、`test_web_helpers`、`test_flow_state_guards`、`test_regions_phone`。
+
+- 假 BA：可到 Phase 0→2；**预期**因无 EC / authchallenge / generic-error 失败，**不应卡死**
+- 完整 OTP + 升权绑 EC：需**真实有效 BA** + 该国号码 + 可用出口（住宅代理/TUN）
+- 冒烟验证过：44 国地址池构造、`elevate_bind` 任务创建、HTTP API 模式映射（见 [HANDOFF.md](./HANDOFF.md)）
 
 ---
 
@@ -183,11 +216,15 @@ socks5h://user:pass@host:port
 
 **每个国家是自己的协议吗？**  是。流程架子参考泰国；locale/区号/资料/证件按所选国家绑定。
 
-**资料会串成泰国吗？**  不会。`address.country` 与手机区号强制等于所选国；资料来自该国 Faker locale。
+**资料会串成泰国吗？**  不会。`address.country` 与手机区号强制等于所选国；优先 OSM/本地池，再 Faker。
+
+**在线地址一直超时？**  设 `PAYPAL_ONLINE_ADDRESS=0` 只用本地池；或检查能否访问 Nominatim/Overpass。
 
 **代理 403 / curl 97 / forbidden ip？**  多为代理商拒绝当前公网 IP；加白名单或开 TUN。详见 [PROXY.md](./PROXY.md)。
 
-**假 BA？**  一般只到 Phase 0/1。
+**假 BA？**  一般 Phase 0 可过，Phase 2 无 EC 后失败退出（正常）。
+
+**`buyer_identity_mode` 写什么？**  Web/API 用 `elevate_bind` 或别名 `identity_elevation`；都会归一成 `elevate_bind`。
 
 ---
 

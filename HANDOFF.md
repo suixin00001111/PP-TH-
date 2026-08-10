@@ -1,7 +1,7 @@
 # PP-TH 项目交接文档（Handoff）
 
 > 本文档写给**接手的 AI/工程师**，用于理解项目现状、架构约定、已知问题与待优化方向。
-> 最后更新：2026-08-10（补充 §7 服务器部署与运维完整信息）
+> 最后更新：2026-08-10（升权模式 + 在线地址 + 44 国地址池；§7 服务器部署仍有效）
 
 ---
 
@@ -54,6 +54,7 @@ python main.py --ba-token BA-xxx --phone +66xxxxxxxxx --country TH \
 | `PAYPAL_PROXY_ENABLED/URL/POOL` | - | 代理开关/单条/代理池 |
 | `PAYPAL_SMSBOWER_API_KEY` | - | 自动接码（可选） |
 | `PAYPAL_WEB_OTP_TIMEOUT_SECONDS` | 1800 | Web 等验证码超时 |
+| `PAYPAL_ONLINE_ADDRESS` | `1` | `1`=OSM 在线地址优先；`0`=仅本地 `ADDRESS_POOLS`（CI/弱网建议 0） |
 
 ---
 
@@ -72,20 +73,23 @@ python main.py --ba-token BA-xxx --phone +66xxxxxxxxx --country TH \
 | 模块 | 职责 |
 |------|------|
 | `flow.py` | **核心状态机**（Phase 0-4 + 重试 + elevate_bind 分支）约 8000 行 |
+| `elevation_flow.py` | **升权专用** `IdentityElevationPayPalFlow`：Guest 升权、绑 EC、BUYER_* GraphQL、严格 EC 门控 |
+| `online_address.py` | OSM Nominatim/Overpass 在线地址 + 磁盘缓存；`PAYPAL_ONLINE_ADDRESS` 开关 |
 | `protocol.py` | 多国 ProtocolContext（locale/区号/证件/地址样式） |
 | `regions.py` / `region_matrix.py` | 国家归一化 / 国家矩阵 |
-| `country_profiles.py` / `oaipy_data.py` | 各国资料生成（姓名/地址/证件，TH 专用数据） |
+| `country_profiles.py` | **44 国 `ADDRESS_POOLS`** + 卡 BIN / 电话规则；表单安全 ASCII 街道 |
+| `oaipy_data.py` | 资料入口：`generate_address` = 在线 → 池 → Faker；姓名/证件 |
 | `proxy.py` / `proxy_bridge.py` | 代理解析/池/诊断 + SOCKS5 认证本地 HTTP 桥 |
 | `fingerprint.py` | 程序合成浏览器指纹（random 模式） |
 | `roxy_fingerprint.py` | Roxy 浏览器指纹捕获（Local API） |
 | `local_headless.py` | Playwright headless 指纹/DataDome/MTR/签名上下文（**已重建为母版版本**，仅加 proxy_bridge 桥） |
 | `mtr.py` | MTR dfp.js sealedResult 生成/回灌 |
-| `session.py` | HTTP 会话（httpx + curl_cffi + 风控 header 注入） |
+| `session.py` | HTTP 会话（httpx + curl_cffi + 风控 header 注入 + `set_euat_token`） |
 | `runtime_config.py` | runtime 模式映射（real/test profile → 各模式默认值） |
 | `runtime_bridge.py` | 运行时桥（datadome/风险信号跨模式分发） |
 | `smsbower.py` / `smsbower_countries.py` | 自动接码 + 国家映射 |
 | `analytics.py` / `tealeaf.py` / `traffic_recorder.py` | 遥测/Tealeaf/流量录制 |
-| `graphql.py` | GraphQL 请求构造 |
+| `graphql.py` | GraphQL（含 `BUYER_CONTEXT_QUERY` / `BUYER_FUNDING_CONTEXT_QUERY`） |
 | `models.py` | 数据模型（UserInfo/CardInfo/BillingAddress/SessionState/WebJob） |
 | `merchant_complete.py` / `b_layer_handoff.py` / `layer_status.py` | 商户完成/B 层交接/分层状态 |
 
@@ -114,11 +118,19 @@ Phase 4  Final authorization   Hagrid/Hermes review → authorize mutation
                                 （BUYER_NOT_SET 时重载上下文重试）
 ```
 
-**Buyer 身份模式（`buyer_identity_mode`）**——Web 下拉/CLI `--buyer-mode`：
+**Buyer 身份模式（`buyer_identity_mode`）**——Web 下拉/CLI `--buyer-mode`/API：
 - `legacy`（默认/原版）：Phase 4 由 Hagrid 上下文绑定 buyer
 - `elevate_bind` / `identity_elevation`（注册后升 Guest、绑 EC 再授权）：
-  `_elevate_guest_identity()` → `_bind_buyer_to_current_ec()` → `_phase4_authorize(skip_initial_hagrid=True)`
+  实现类 `IdentityElevationPayPalFlow`（`paypal/elevation_flow.py`）  
+  `_elevate_guest_identity()` → `_bind_buyer_to_current_ec()` → `_phase4_authorize(skip_initial_hagrid=True)`  
+  Web 任务在 elevate 时选 `WebElevationPayPalFlow`
 - 别名映射在 `flow.py _normalize_buyer_identity_mode` 和 `web.py` 各一份（注意同步）
+- 前端 `web_static`：下拉 `elevate_bind`，展示标签「升Guest绑EC」
+
+**地址生成（2026-08-10）**：
+1. `paypal/online_address.py`：Nominatim 优先，失败再 Overpass；按国缓存
+2. `ADDRESS_POOLS`：**44 国全覆盖**（补齐 MY PH NZ ES IT SE PL PT IE CH AT BE DK NO FI IN AE SA IL TR RU ZA AR CL CO PE 等，消除 Faker 占位垃圾）
+3. `PAYPAL_ONLINE_ADDRESS=0` 可强制离线池（单元测试/弱网冒烟用）
 
 **重试体系**：
 - 卡片重试：`_signup_with_card_retry`（max_card_attempts=5，卡被拒换新卡）
@@ -251,12 +263,17 @@ curl -s http://127.0.0.1:8080/api/health   # -> {"ok":true,...}
 ## 8. 测试与验证
 
 ```bash
-python -m unittest discover -s tests   # 当前 61 用例全绿（服务器/本地一致）
+PAYPAL_ONLINE_ADDRESS=0 python -m unittest discover -s tests
 python -m compileall -q paypal web.py main.py config.py
 ```
 
-- 服务器验证过：61 测试通过、compileall 通过、headless 启动 `LAUNCH_OK`（Chromium 110）
-- 新功能必须配套测试（对齐母版的测试已同步更新为"验证母版行为"）
+- 服务器验证过（2026-08-07）：61 测试通过、compileall 通过、headless 启动 `LAUNCH_OK`（Chromium 110）
+- **2026-08-10 本地冒烟**（假 BA，关在线地址）：
+  - 关键单测（buyer / online_address / country_profiles / web_helpers / flow_guards / regions_phone）通过
+  - 44 国 `ADDRESS_POOLS` + `IdentityElevationPayPalFlow` 构造 **44/44**
+  - `create_job(elevate_bind)`：Phase0→Phase2，假 BA 无 EC → `failed`（**不卡死**）
+  - HTTP `POST /api/jobs`：`identity_elevation` 归一为 `elevate_bind`；**phone 区号须匹配 country**
+- 新功能必须配套测试（`tests/test_buyer_identity_mode.py`、`tests/test_online_address.py`）
 
 ---
 
@@ -269,7 +286,9 @@ python -m compileall -q paypal web.py main.py config.py
 3. **BA token 单次/短时效**：同一 token 用第二次可能返回 generic-error（ModXO countries 403）
 4. **playwright 1.30 限制**：CentOS 7 只能装 1.30.0（Chromium 110），`requirements-headless.txt` 写的 `>=1.40.0` 与服务器不符——**若重装环境需固定 `playwright==1.30.0`**
 5. **Web 任务为内存态**：重启 web.py 即丢失所有任务；`/api/jobs` 按浏览器 cookie（device_id）隔离
-6. **elevate_bind 实机未完整验证**：单元测试覆盖分支调用链，但需真实号跑通 Phase 3+4 才算全链路验证
+6. **elevate_bind 全链路依赖真实 BA**：单元测试 + 假 BA 冒烟覆盖到 Phase2 失败收尾；**Phase 3+4 升权绑 EC 成功**需真实 BA + 该国号 + 可用出口。巴西等国在真实环境下曾跑通业务侧，勿用 `BA-TEST…` 误判为程序卡死
+7. **在线地址依赖外网**：Nominatim/Overpass 超时会拖慢 `generate_address`；冒烟/CI 设 `PAYPAL_ONLINE_ADDRESS=0`
+8. **HTTP 建任务 phone/country 一致性**：BR 任务不能填 `+66…`，否则 400
 
 ---
 
@@ -298,4 +317,16 @@ python -m compileall -q paypal web.py main.py config.py
 
 ---
 
-*交接人：WorkBuddy（2026-08-07）。有疑问可查看 `REVERSE_NOTES.md`（协议逆向笔记）与 `PROTOCOL_CHAIN.md`（协议链）。*
+## 12. 2026-08-10 变更摘要（同步仓库）
+
+| 提交主题 | 内容 |
+|----------|------|
+| Identity elevation | `elevation_flow.py`、GraphQL BUYER_*、`session.set_euat_token`、Web 选流 |
+| Online address | `online_address.py`、`.env` `PAYPAL_ONLINE_ADDRESS`、`generate_address` 路由 |
+| Address pools | `country_profiles.ADDRESS_POOLS` 补齐 44 国 + ASCII/邮编修正 |
+
+用户文档入口：`README.md` · `SETUP.md` · `PROTOCOL_CHAIN.md` · `PROXY.md` · `DEPLOY.md`。
+
+---
+
+*交接更新：2026-08-10（升权/地址）。服务器 §7 以 2026-08-07 部署为准。有疑问可查看 `REVERSE_NOTES.md` 与 `PROTOCOL_CHAIN.md`。*

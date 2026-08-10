@@ -445,7 +445,7 @@ ADDRESS_POOLS: dict[str, list[dict[str, Any]]] = {
         {"state": "TX", "city": "Austin", "district": "Downtown", "postal": "78701",
          "streets": ["Congress Avenue", "6th Street", "Lavaca Street"]},
         {"state": "TX", "city": "Houston", "district": "Midtown", "postal": "77002",
-         "streets": ["Main Street", "Travis Street", "Louisiana Street"]},
+         "streets": ["Fannin Street", "Travis Street", "Louisiana Street"]},
         {"state": "FL", "city": "Miami", "district": "Brickell", "postal": "33131",
          "streets": ["Brickell Avenue", "SE 1st Street", "Coral Way"]},
         {"state": "IL", "city": "Chicago", "district": "Loop", "postal": "60601",
@@ -632,7 +632,7 @@ ADDRESS_POOLS.update({
          "streets": ["King Street West", "Queen Street West", "Bay Street"]},
         {"state": "BC", "city": "Vancouver", "district": "Downtown", "postal": "V6B 1A1",
          "streets": ["Robson Street", "Granville Street", "Georgia Street"]},
-        {"state": "QC", "city": "Montreal", "district": "Ville-Marie", "postal": "H2Y 1C6",
+        {"state": "QC", "city": "Montreal", "district": "Downtown", "postal": "H2Y 1C6",
          "streets": ["Rue Sainte-Catherine", "Boulevard Saint-Laurent", "Rue Sherbrooke"]},
         {"state": "AB", "city": "Calgary", "district": "Downtown", "postal": "T2P 1J9",
          "streets": ["Stephen Avenue", "1st Street SW", "8th Avenue SW"]},
@@ -659,6 +659,332 @@ ADDRESS_POOLS.update({
     ],
 })
 
+# ---------------------------------------------------------------------------
+# Remaining markets that previously fell through to Faker junk
+# (Ville/mouth/Capital placeholders, wrong postcodes, mixed state/city).
+# ASCII / form-safe only; postal codes match common local formats.
+# ---------------------------------------------------------------------------
+ADDRESS_POOLS.update({
+    "MY": [
+        {"state": "KUL", "city": "Kuala Lumpur", "district": "Bukit Bintang", "postal": "55100",
+         "streets": ["Jalan Bukit Bintang", "Jalan Sultan Ismail", "Jalan Imbi"]},
+        {"state": "KUL", "city": "Kuala Lumpur", "district": "KLCC", "postal": "50088",
+         "streets": ["Jalan Ampang", "Jalan Pinang", "Jalan Binjai"]},
+        {"state": "SGR", "city": "Petaling Jaya", "district": "SS2", "postal": "47300",
+         "streets": ["Jalan SS2/24", "Jalan Universiti", "Jalan 222"]},
+        {"state": "JHR", "city": "Johor Bahru", "district": "City Centre", "postal": "80000",
+         "streets": ["Jalan Wong Ah Fook", "Jalan Trus", "Jalan Ibrahim"]},
+        {"state": "PNG", "city": "George Town", "district": "City Centre", "postal": "10200",
+         "streets": ["Jalan Penang", "Lebuh Chulia", "Jalan Burma"]},
+    ],
+    "PH": [
+        {"state": "NCR", "city": "Manila", "district": "Malate", "postal": "1004",
+         "streets": ["Roxas Boulevard", "Taft Avenue", "Pedro Gil Street"]},
+        {"state": "NCR", "city": "Makati", "district": "Poblacion", "postal": "1210",
+         "streets": ["Ayala Avenue", "Makati Avenue", "Paseo de Roxas"]},
+        {"state": "NCR", "city": "Quezon City", "district": "Diliman", "postal": "1101",
+         "streets": ["Commonwealth Avenue", "Timog Avenue", "Quezon Avenue"]},
+        {"state": "NCR", "city": "Pasig", "district": "Ortigas", "postal": "1605",
+         "streets": ["Ortigas Avenue", "Julia Vargas Avenue", "San Miguel Avenue"]},
+        {"state": "CEB", "city": "Cebu City", "district": "Cebu Business Park", "postal": "6000",
+         "streets": ["Osmena Boulevard", "Archbishop Reyes Avenue", "Maxilom Avenue"]},
+    ],
+    "NZ": [
+        {"state": "AUK", "city": "Auckland", "district": "CBD", "postal": "1010",
+         "streets": ["Queen Street", "Karangahape Road", "Customs Street"]},
+        {"state": "AUK", "city": "Auckland", "district": "Ponsonby", "postal": "1011",
+         "streets": ["Ponsonby Road", "Jervois Road", "Franklin Road"]},
+        {"state": "WGN", "city": "Wellington", "district": "Te Aro", "postal": "6011",
+         "streets": ["Courtenay Place", "Cuba Street", "Lambton Quay"]},
+        {"state": "CAN", "city": "Christchurch", "district": "Central City", "postal": "8011",
+         "streets": ["Colombo Street", "High Street", "Cashel Street"]},
+        {"state": "OTA", "city": "Dunedin", "district": "Central", "postal": "9016",
+         "streets": ["George Street", "Princes Street", "Stuart Street"]},
+    ],
+    "ES": [
+        {"state": "MD", "city": "Madrid", "district": "Centro", "postal": "28013",
+         "streets": ["Gran Via", "Calle de Alcala", "Calle Mayor"]},
+        {"state": "MD", "city": "Madrid", "district": "Salamanca", "postal": "28001",
+         "streets": ["Calle de Serrano", "Calle de Goya", "Calle de Velazquez"]},
+        {"state": "CT", "city": "Barcelona", "district": "Eixample", "postal": "08008",
+         "streets": ["Passeig de Gracia", "Rambla de Catalunya", "Carrer de Valencia"]},
+        {"state": "CT", "city": "Barcelona", "district": "Ciutat Vella", "postal": "08002",
+         "streets": ["La Rambla", "Via Laietana", "Carrer de Ferran"]},
+        {"state": "VC", "city": "Valencia", "district": "Ciutat Vella", "postal": "46001",
+         "streets": ["Calle de la Paz", "Calle Colon", "Avenida del Puerto"]},
+        {"state": "AN", "city": "Seville", "district": "Centro", "postal": "41001",
+         "streets": ["Calle Sierpes", "Avenida de la Constitucion", "Calle Tetuan"]},
+    ],
+    "IT": [
+        {"state": "RM", "city": "Rome", "district": "Centro Storico", "postal": "00186",
+         "streets": ["Via del Corso", "Via Condotti", "Via Nazionale"]},
+        {"state": "RM", "city": "Rome", "district": "Trastevere", "postal": "00153",
+         "streets": ["Viale Trastevere", "Via della Lungaretta", "Piazza di Santa Maria"]},
+        {"state": "MI", "city": "Milan", "district": "Centro", "postal": "20121",
+         "streets": ["Via Montenapoleone", "Corso Buenos Aires", "Via Dante"]},
+        {"state": "MI", "city": "Milan", "district": "Navigli", "postal": "20144",
+         "streets": ["Corso di Porta Ticinese", "Via Tortona", "Ripa di Porta Ticinese"]},
+        {"state": "NA", "city": "Naples", "district": "Centro", "postal": "80133",
+         "streets": ["Via Toledo", "Via Chiaia", "Via dei Mille"]},
+        {"state": "TO", "city": "Turin", "district": "Centro", "postal": "10121",
+         "streets": ["Via Roma", "Via Garibaldi", "Corso Vittorio Emanuele II"]},
+    ],
+    "SE": [
+        {"state": "AB", "city": "Stockholm", "district": "Norrmalm", "postal": "111 57",
+         "streets": ["Drottninggatan", "Kungsgatan", "Sveavagen"]},
+        {"state": "AB", "city": "Stockholm", "district": "Sodermalm", "postal": "118 26",
+         "streets": ["Gotgatan", "Hornsgatan", "Folgungagatan"]},
+        {"state": "O", "city": "Gothenburg", "district": "Centrum", "postal": "411 10",
+         "streets": ["Avenyn", "Kungsgatan", "Ostra Hamngatan"]},
+        {"state": "M", "city": "Malmo", "district": "Centrum", "postal": "211 34",
+         "streets": ["Sodergatan", "Stortorget", "Amiralsgatan"]},
+        {"state": "C", "city": "Uppsala", "district": "Centrum", "postal": "753 20",
+         "streets": ["Svartbacksgatan", "Kungsangsgatan", "Dragarbrunnsgatan"]},
+    ],
+    "PL": [
+        {"state": "MZ", "city": "Warsaw", "district": "Srodmiescie", "postal": "00-001",
+         "streets": ["Nowy Swiat", "Marszalkowska", "Krakowskie Przedmiescie"]},
+        {"state": "MZ", "city": "Warsaw", "district": "Mokotow", "postal": "02-001",
+         "streets": ["Pulawska", "Wilhelma Konrada Roentgena", "Raclawicka"]},
+        {"state": "MA", "city": "Krakow", "district": "Stare Miasto", "postal": "31-001",
+         "streets": ["Florianska", "Grodzka", "Szewska"]},
+        {"state": "PM", "city": "Gdansk", "district": "Srodmiescie", "postal": "80-001",
+         "streets": ["Dluga", "Szeroka", "Swietojanska"]},
+        {"state": "DS", "city": "Wroclaw", "district": "Stare Miasto", "postal": "50-001",
+         "streets": ["Swidnicka", "Ruska", "Ofiar Oswiecimskich"]},
+    ],
+    "PT": [
+        {"state": "LIS", "city": "Lisbon", "district": "Baixa", "postal": "1100-148",
+         "streets": ["Rua Augusta", "Rua do Ouro", "Rua da Prata"]},
+        {"state": "LIS", "city": "Lisbon", "district": "Chiado", "postal": "1200-094",
+         "streets": ["Rua Garrett", "Rua do Carmo", "Largo do Chiado"]},
+        {"state": "PRT", "city": "Porto", "district": "Cedofeita", "postal": "4050-045",
+         "streets": ["Rua de Santa Catarina", "Avenida dos Aliados", "Rua da Galeria de Paris"]},
+        {"state": "FAR", "city": "Faro", "district": "Centro", "postal": "8000-151",
+         "streets": ["Rua de Santo Antonio", "Rua First of May", "Avenida 5 de Outubro"]},
+        {"state": "BRG", "city": "Braga", "district": "Centro", "postal": "4700-307",
+         "streets": ["Avenida Central", "Rua do Souto", "Rua Andrade Corvo"]},
+    ],
+    "IE": [
+        {"state": "D", "city": "Dublin", "district": "City Centre", "postal": "D02 X285",
+         "streets": ["Grafton Street", "O'Connell Street", "Dame Street"]},
+        {"state": "D", "city": "Dublin", "district": "Docklands", "postal": "D01 F5P2",
+         "streets": ["Mayor Street Lower", "North Wall Quay", "Custom House Quay"]},
+        {"state": "C", "city": "Cork", "district": "City Centre", "postal": "T12 P8FR",
+         "streets": ["St Patrick's Street", "Oliver Plunkett Street", "Grand Parade"]},
+        {"state": "G", "city": "Galway", "district": "City Centre", "postal": "H91 E9T2",
+         "streets": ["Shop Street", "Quay Street", "Eyre Square"]},
+        {"state": "L", "city": "Limerick", "district": "City Centre", "postal": "V94 T9PX",
+         "streets": ["O'Connell Street", "William Street", "Catherine Street"]},
+    ],
+    "CH": [
+        {"state": "ZH", "city": "Zurich", "district": "Kreis 1", "postal": "8001",
+         "streets": ["Bahnhofstrasse", "Limmatquai", "Niederdorfstrasse"]},
+        {"state": "GE", "city": "Geneva", "district": "Centre", "postal": "1204",
+         "streets": ["Rue du Rhone", "Rue de la Confederation", "Quai du Mont-Blanc"]},
+        {"state": "BE", "city": "Bern", "district": "Altstadt", "postal": "3011",
+         "streets": ["Kramgasse", "Marktgasse", "Spitalgasse"]},
+        {"state": "BS", "city": "Basel", "district": "Grossbasel", "postal": "4001",
+         "streets": ["Freie Strasse", "Marktplatz", "Aeschenvorstadt"]},
+        {"state": "VD", "city": "Lausanne", "district": "Centre", "postal": "1003",
+         "streets": ["Rue de Bourg", "Place Saint-Francois", "Avenue de la Gare"]},
+    ],
+    "AT": [
+        {"state": "W", "city": "Vienna", "district": "Innere Stadt", "postal": "1010",
+         "streets": ["Kaerntner Strasse", "Graben", "Kohlmarkt"]},
+        {"state": "W", "city": "Vienna", "district": "Mariahilf", "postal": "1060",
+         "streets": ["Mariahilfer Strasse", "Getreidemarkt", "Linke Wienzeile"]},
+        {"state": "S", "city": "Salzburg", "district": "Altstadt", "postal": "5020",
+         "streets": ["Getreidegasse", "Residenzplatz", "Linzer Gasse"]},
+        {"state": "T", "city": "Innsbruck", "district": "Altstadt", "postal": "6020",
+         "streets": ["Maria-Theresien-Strasse", "Herzog-Friedrich-Strasse", "Museumstrasse"]},
+        {"state": "St", "city": "Graz", "district": "Innere Stadt", "postal": "8010",
+         "streets": ["Herrengasse", "Sporgasse", "Hauptplatz"]},
+    ],
+    "BE": [
+        {"state": "BRU", "city": "Brussels", "district": "Centre", "postal": "1000",
+         "streets": ["Rue Neuve", "Boulevard Anspach", "Rue du Marche aux Herbes"]},
+        {"state": "BRU", "city": "Brussels", "district": "Ixelles", "postal": "1050",
+         "streets": ["Chaussee d Ixelles", "Avenue Louise", "Place Flagey"]},
+        {"state": "VAN", "city": "Antwerp", "district": "Centrum", "postal": "2000",
+         "streets": ["Meir", "Schoenmarkt", "Nationalestraat"]},
+        {"state": "VOV", "city": "Ghent", "district": "Centrum", "postal": "9000",
+         "streets": ["Veldstraat", "Korenmarkt", "Langemunt"]},
+        {"state": "WHT", "city": "Liege", "district": "Centre", "postal": "4000",
+         "streets": ["Rue Vinave d Ile", "Place Saint-Lambert", "Boulevard de la Sauveniere"]},
+    ],
+    "DK": [
+        {"state": "84", "city": "Copenhagen", "district": "Indre By", "postal": "1050",
+         "streets": ["Stroget", "Kobmagergade", "Nyhavn"]},
+        {"state": "84", "city": "Copenhagen", "district": "Vesterbro", "postal": "1620",
+         "streets": ["Istegade", "Vesterbrogade", "Saxogade"]},
+        {"state": "82", "city": "Aarhus", "district": "Centrum", "postal": "8000",
+         "streets": ["Sondergade", "Store Torv", "Aaboulevarden"]},
+        {"state": "83", "city": "Odense", "district": "Centrum", "postal": "5000",
+         "streets": ["Vestergade", "Overgade", "Albanigade"]},
+        {"state": "81", "city": "Aalborg", "district": "Centrum", "postal": "9000",
+         "streets": ["Algade", "Boulevarden", "Osteraa"]},
+    ],
+    "NO": [
+        {"state": "03", "city": "Oslo", "district": "Sentrum", "postal": "0150",
+         "streets": ["Karl Johans gate", "Stortingsgata", "Akersgata"]},
+        {"state": "03", "city": "Oslo", "district": "Grunerlokka", "postal": "0552",
+         "streets": ["Thorvald Meyers gate", "Markveien", "Toftes gate"]},
+        {"state": "46", "city": "Bergen", "district": "Sentrum", "postal": "5003",
+         "streets": ["Torgallmenningen", "Strandgaten", "Bryggen"]},
+        {"state": "11", "city": "Stavanger", "district": "Sentrum", "postal": "4006",
+         "streets": ["Ovre Holmegate", "Kirkegata", "Skagen"]},
+        {"state": "50", "city": "Trondheim", "district": "Midtbyen", "postal": "7011",
+         "streets": ["Nordre gate", "Munkegata", "Kongens gate"]},
+    ],
+    "FI": [
+        {"state": "18", "city": "Helsinki", "district": "Keskusta", "postal": "00100",
+         "streets": ["Mannerheimintie", "Aleksanterinkatu", "Esplanadi"]},
+        {"state": "18", "city": "Helsinki", "district": "Kallio", "postal": "00500",
+         "streets": ["Hameentie", "Helsinginkatu", "Siltasaarenkatu"]},
+        {"state": "19", "city": "Espoo", "district": "Tapiola", "postal": "02100",
+         "streets": ["Lansituulentie", "Itatuulentie", "Tapiontori"]},
+        {"state": "19", "city": "Tampere", "district": "Keskusta", "postal": "33100",
+         "streets": ["Hameenkatu", "Kuninkaankatu", "Keskustori"]},
+        {"state": "19", "city": "Turku", "district": "Keskusta", "postal": "20100",
+         "streets": ["Aurakatu", "Yliopistonkatu", "Hameenkatu"]},
+    ],
+    "IN": [
+        {"state": "MH", "city": "Mumbai", "district": "Andheri West", "postal": "400053",
+         "streets": ["SV Road", "Lokhandwala Complex Road", "Juhu Tara Road"]},
+        {"state": "MH", "city": "Mumbai", "district": "Bandra West", "postal": "400050",
+         "streets": ["Linking Road", "Hill Road", "Turner Road"]},
+        {"state": "DL", "city": "New Delhi", "district": "Connaught Place", "postal": "110001",
+         "streets": ["Janpath", "Barakhamba Road", "Connaught Circus"]},
+        {"state": "KA", "city": "Bengaluru", "district": "Indiranagar", "postal": "560038",
+         "streets": ["100 Feet Road", "CMH Road", "Double Road"]},
+        {"state": "KA", "city": "Bengaluru", "district": "Koramangala", "postal": "560034",
+         "streets": ["80 Feet Road", "Sony Signal Road", "Intermediate Ring Road"]},
+        {"state": "TN", "city": "Chennai", "district": "T Nagar", "postal": "600017",
+         "streets": ["Usman Road", "South Usman Road", "Pondy Bazaar"]},
+    ],
+    "AE": [
+        {"state": "DU", "city": "Dubai", "district": "Downtown", "postal": "00000",
+         "streets": ["Sheikh Mohammed Bin Rashid Boulevard", "Financial Centre Road", "Al Saada Street"]},
+        {"state": "DU", "city": "Dubai", "district": "Jumeirah", "postal": "00000",
+         "streets": ["Jumeirah Beach Road", "Al Wasl Road", "2nd December Street"]},
+        {"state": "DU", "city": "Dubai", "district": "Business Bay", "postal": "00000",
+         "streets": ["Al Khaleej Al Tejari Street", "Marasi Drive", "Bay Square Road"]},
+        {"state": "AZ", "city": "Abu Dhabi", "district": "Al Markaziyah", "postal": "00000",
+         "streets": ["Corniche Road", "Hamdan Street", "Electra Street"]},
+        {"state": "AZ", "city": "Abu Dhabi", "district": "Al Reem Island", "postal": "00000",
+         "streets": ["Al Reem Boulevard", "Najmat Street", "Shams Gate District"]},
+    ],
+    "SA": [
+        {"state": "01", "city": "Riyadh", "district": "Olaya", "postal": "12211",
+         "streets": ["Olaya Street", "King Fahd Road", "Tahlia Street"]},
+        {"state": "01", "city": "Riyadh", "district": "Al Malaz", "postal": "12831",
+         "streets": ["Prince Abdulaziz Ibn Musaid Street", "Al Batha Street"]},
+        {"state": "02", "city": "Jeddah", "district": "Al Balad", "postal": "21442",
+         "streets": ["King Abdulaziz Road", "Palestine Street", "Tahlia Street"]},
+        {"state": "02", "city": "Jeddah", "district": "Al Hamra", "postal": "21442",
+         "streets": ["Prince Sultan Street", "Corniche Road", "Al Andalus Street"]},
+        {"state": "03", "city": "Dammam", "district": "Al Shati", "postal": "32241",
+         "streets": ["King Saud Road", "Prince Mohammed Street", "Corniche Road"]},
+    ],
+    "IL": [
+        {"state": "TA", "city": "Tel Aviv", "district": "Center", "postal": "6100000",
+         "streets": ["Dizengoff Street", "Rothschild Boulevard", "Allenby Street"]},
+        {"state": "TA", "city": "Tel Aviv", "district": "Florentin", "postal": "6610501",
+         "streets": ["Herzl Street", "Vital Street", "Salame Road"]},
+        {"state": "JM", "city": "Jerusalem", "district": "City Center", "postal": "9100001",
+         "streets": ["Jaffa Road", "King George Street", "Ben Yehuda Street"]},
+        {"state": "HA", "city": "Haifa", "district": "Hadar", "postal": "3100000",
+         "streets": ["Herzl Street", "Nordau Street", "HaNassi Avenue"]},
+        {"state": "TA", "city": "Herzliya", "district": "Pituach", "postal": "4672200",
+         "streets": ["Ramot Yam Street", "Medinat HaYehudim Street"]},
+    ],
+    "TR": [
+        {"state": "34", "city": "Istanbul", "district": "Besiktas", "postal": "34353",
+         "streets": ["Barbaros Boulevard", "Nispetiye Street", "Abbasaga Street"]},
+        {"state": "34", "city": "Istanbul", "district": "Kadikoy", "postal": "34710",
+         "streets": ["Bahariye Street", "Moda Street", "Caferaga Street"]},
+        {"state": "06", "city": "Ankara", "district": "Cankaya", "postal": "06680",
+         "streets": ["Ataturk Boulevard", "Tunali Hilmi Street", "Bestekar Street"]},
+        {"state": "35", "city": "Izmir", "district": "Konak", "postal": "35210",
+         "streets": ["Kordon", "Cumhuriyet Boulevard", "Kibris Sehitleri Street"]},
+        {"state": "07", "city": "Antalya", "district": "Muratpasa", "postal": "07040",
+         "streets": ["Ataturk Street", "Ismet Inonu Boulevard", "Lara Road"]},
+    ],
+    "RU": [
+        {"state": "MOW", "city": "Moscow", "district": "Tverskoy", "postal": "125009",
+         "streets": ["Tverskaya Street", "Bolshaya Nikitskaya", "Petrovka Street"]},
+        {"state": "MOW", "city": "Moscow", "district": "Arbat", "postal": "119002",
+         "streets": ["Arbat Street", "New Arbat Avenue", "Povarskaya Street"]},
+        {"state": "SPE", "city": "Saint Petersburg", "district": "Tsentralny", "postal": "190000",
+         "streets": ["Nevsky Prospect", "Liteyny Prospect", "Gorokhovaya Street"]},
+        {"state": "SPE", "city": "Saint Petersburg", "district": "Vasileostrovsky", "postal": "199034",
+         "streets": ["Bolshoy Prospect V.O.", "Sredny Prospect V.O."]},
+        {"state": "SVE", "city": "Yekaterinburg", "district": "Leninsky", "postal": "620014",
+         "streets": ["Lenina Avenue", "Malysheva Street", "8 Marta Street"]},
+    ],
+    "ZA": [
+        {"state": "GP", "city": "Johannesburg", "district": "Sandton", "postal": "2196",
+         "streets": ["Rivonia Road", "5th Street", "Maude Street"]},
+        {"state": "GP", "city": "Johannesburg", "district": "Rosebank", "postal": "2196",
+         "streets": ["Oxford Road", "Tyrwhitt Avenue", "Baker Street"]},
+        {"state": "WC", "city": "Cape Town", "district": "City Bowl", "postal": "8001",
+         "streets": ["Long Street", "Loop Street", "Buitengracht Street"]},
+        {"state": "WC", "city": "Cape Town", "district": "Sea Point", "postal": "8005",
+         "streets": ["Main Road", "Beach Road", "Regent Road"]},
+        {"state": "KZN", "city": "Durban", "district": "City Centre", "postal": "4001",
+         "streets": ["West Street", "Smith Street", "Point Road"]},
+    ],
+    "AR": [
+        {"state": "C", "city": "Buenos Aires", "district": "Palermo", "postal": "C1425",
+         "streets": ["Avenida Santa Fe", "Calle Honduras", "Calle Thames"]},
+        {"state": "C", "city": "Buenos Aires", "district": "Recoleta", "postal": "C1113",
+         "streets": ["Avenida Callao", "Calle Junin", "Avenida Quintana"]},
+        {"state": "C", "city": "Buenos Aires", "district": "Microcentro", "postal": "C1001",
+         "streets": ["Avenida Corrientes", "Calle Florida", "Avenida de Mayo"]},
+        {"state": "X", "city": "Cordoba", "district": "Nueva Cordoba", "postal": "X5000",
+         "streets": ["Avenida Hipolito Yrigoyen", "Boulevard San Juan", "Calle Independencia"]},
+        {"state": "B", "city": "Rosario", "district": "Centro", "postal": "S2000",
+         "streets": ["Calle Cordoba", "Calle San Martin", "Avenida Pellegrini"]},
+    ],
+    "CL": [
+        {"state": "RM", "city": "Santiago", "district": "Providencia", "postal": "7500000",
+         "streets": ["Avenida Providencia", "Avenida Los Leones", "Calle Manuel Montt"]},
+        {"state": "RM", "city": "Santiago", "district": "Las Condes", "postal": "7550000",
+         "streets": ["Avenida Apoquindo", "Avenida El Bosque Norte", "Calle Isidora Goyenechea"]},
+        {"state": "RM", "city": "Santiago", "district": "Santiago Centro", "postal": "8320000",
+         "streets": ["Avenida Libertador Bernardo O'Higgins", "Calle Bandera", "Calle Huerfanos"]},
+        {"state": "VS", "city": "Valparaiso", "district": "Puerto", "postal": "2340000",
+         "streets": ["Calle Condell", "Avenida Argentina", "Calle Esmeralda"]},
+        {"state": "BI", "city": "Concepcion", "district": "Centro", "postal": "4030000",
+         "streets": ["Calle Barros Arana", "Avenida O'Higgins", "Calle Caupolican"]},
+    ],
+    "CO": [
+        {"state": "DC", "city": "Bogota", "district": "Chapinero", "postal": "110221",
+         "streets": ["Carrera 7", "Calle 85", "Carrera 11"]},
+        {"state": "DC", "city": "Bogota", "district": "Usaquen", "postal": "110111",
+         "streets": ["Carrera 7", "Calle 116", "Avenida 19"]},
+        {"state": "ANT", "city": "Medellin", "district": "El Poblado", "postal": "050021",
+         "streets": ["Carrera 43A", "Calle 10", "Avenida El Poblado"]},
+        {"state": "VAC", "city": "Cali", "district": "Granada", "postal": "760044",
+         "streets": ["Avenida 6N", "Calle 15", "Carrera 4"]},
+        {"state": "ATL", "city": "Barranquilla", "district": "El Prado", "postal": "080020",
+         "streets": ["Carrera 54", "Calle 72", "Avenida Olaya Herrera"]},
+    ],
+    "PE": [
+        {"state": "LIM", "city": "Lima", "district": "Miraflores", "postal": "15074",
+         "streets": ["Avenida Larco", "Calle Schell", "Avenida Jose Pardo"]},
+        {"state": "LIM", "city": "Lima", "district": "San Isidro", "postal": "15036",
+         "streets": ["Avenida Conquistadores", "Calle Las Begonias", "Avenida Javier Prado"]},
+        {"state": "LIM", "city": "Lima", "district": "Barranco", "postal": "15063",
+         "streets": ["Avenida Pedro de Osma", "Calle Union", "Bajada de Banos"]},
+        {"state": "ARE", "city": "Arequipa", "district": "Cercado", "postal": "04001",
+         "streets": ["Calle Mercaderes", "Calle San Francisco", "Portal de Flores"]},
+        {"state": "CUS", "city": "Cusco", "district": "Centro Historico", "postal": "08000",
+         "streets": ["Avenida El Sol", "Calle Triunfo", "Portal de Panes"]},
+    ],
+})
+
 
 def _house_number(country: str) -> str:
     code = (country or "").strip().upper()
@@ -669,19 +995,34 @@ def _house_number(country: str) -> str:
         if random.random() < 0.35:
             return f"{base}/{random.randint(1, 20)}"
         return base
-    if code == "GB":
+    if code in {"GB", "IE"}:
         return str(random.randint(1, 220))
-    if code in {"US", "CA", "AU", "NZ"}:
+    if code in {"US", "CA", "AU", "NZ", "ZA"}:
         return str(random.randint(10, 8999))
     if code == "BR":
         return str(random.randint(12, 4899))
-    if code in {"DE", "KR"}:
+    if code in {"DE", "AT", "CH", "KR"}:
         return str(random.randint(1, 180))
     if code == "NL":
         num = str(random.randint(1, 240))
         if random.random() < 0.25:
             return f"{num}{random.choice(list('ABCDEF'))}"
         return num
+    if code in {"SE", "NO", "DK", "FI"}:
+        return str(random.randint(1, 120))
+    if code == "PL":
+        base = str(random.randint(1, 99))
+        if random.random() < 0.35:
+            return f"{base}/{random.randint(1, 40)}"
+        return base
+    if code in {"ES", "IT", "PT", "FR", "BE"}:
+        return str(random.randint(1, 220))
+    if code in {"MX", "AR", "CL", "CO", "PE"}:
+        return str(random.randint(10, 2999))
+    if code in {"MY", "PH", "ID", "SG", "IN"}:
+        return str(random.randint(1, 399))
+    if code in {"AE", "SA", "IL", "TR", "RU"}:
+        return str(random.randint(1, 180))
     return str(random.randint(1, 999))
 
 
@@ -690,9 +1031,10 @@ def generate_address_dict(country: str) -> dict[str, str]:
     code = (country or "TH").strip().upper()
     pool = ADDRESS_POOLS.get(code)
     if not pool:
+        # Last-resort template — prefer extending ADDRESS_POOLS instead.
         return {
             "street": "Main Street",
-            "house_number": str(random.randint(1, 999)),
+            "house_number": _house_number(code)[:12],
             "district": "Center",
             "city": "Capital",
             "state": code,
