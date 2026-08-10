@@ -88,6 +88,59 @@ query CheckoutSessionDataQuery($token: String!) {
 }
 """
 
+
+BUYER_CONTEXT_QUERY = """
+query BuyerContextQuery($token: String!) {
+  checkoutSession(token: $token) {
+    buyer {
+      userId
+      auth {
+        accessToken
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}
+"""
+
+BUYER_FUNDING_CONTEXT_QUERY = """
+query BuyerFundingContextQuery($token: String!) {
+  checkoutSession(token: $token) {
+    buyer {
+      userId
+      auth {
+        accessToken
+        __typename
+      }
+      __typename
+    }
+    fundingOptions {
+      fundingInstrument {
+        id
+        lastDigits
+        type
+        __typename
+      }
+      allPlans {
+        fundingSources {
+          fundingInstrument {
+            id
+            type
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}
+"""
+
 # Current checkoutweb/weasley GriffinMetadataQuery.  The old root field
 # `griffin(token: ...)` was removed; locale metadata now lives under
 # Query.localeMetadata.

@@ -26,6 +26,7 @@ from urllib.parse import unquote, urlparse
 from loguru import logger
 
 from paypal.flow import PayPalFlow
+from paypal.elevation_flow import IdentityElevationPayPalFlow
 from paypal.models import BillingAddress, CardInfo, UserInfo
 from paypal.oaipy_data import generate_address, generate_card, generate_oaipy_profile, generate_user
 from paypal.proxy import ProxyConfig, build_proxy_config, resolve_working_proxy_entry, resolve_outbound_proxy, get_system_proxy_entry, scrub_process_proxy_env, restore_process_proxy_env
@@ -1251,6 +1252,19 @@ class WebPayPalFlow(PayPalFlow):
 # ----------------------------- logging -----------------------------
 
 
+
+class WebElevationPayPalFlow(WebPayPalFlow, IdentityElevationPayPalFlow):
+    """Web OTP adapter + pure-protocol identity elevation (guest -> member)."""
+
+    def _elevate_guest_identity(self):
+        self._set_stage('Buyer: identity elevation (guest -> member)')
+        return super()._elevate_guest_identity()
+
+    def _bind_buyer_to_current_ec(self):
+        self._set_stage('Buyer: bind elevated member to EC')
+        return super()._bind_buyer_to_current_ec()
+
+
 def _job_log_sink(message: Any) -> None:
     record = message.record
     job_id = record["extra"].get("job_id")
@@ -1636,7 +1650,23 @@ def run_job(job: WebJob) -> None:
                 getattr(job, "buyer_identity_mode", "legacy"),
             )
 
-            flow = WebPayPalFlow(
+            flow_cls = (
+                WebElevationPayPalFlow
+                if str(getattr(job, "buyer_identity_mode", "legacy") or "legacy").strip().lower()
+                in {
+                    "elevate_bind",
+                    "identity_elevation",
+                    "guest_elevate",
+                    "bind_ec",
+                    "elevate",
+                    "guest_bind",
+                    "bind",
+                    "v2",
+                    "elevate_guest_bind_ec",
+                }
+                else WebPayPalFlow
+            )
+            flow = flow_cls(
                 ba_token=job.ba_token,
                 user=user,
                 card=card,

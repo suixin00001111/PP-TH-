@@ -767,6 +767,26 @@ class PayPalSession:
             self.state.euat_token = token
             logger.info("EUAT cookie captured from response Set-Cookie header len={}", len(token))
 
+
+    def set_euat_token(self, token: str) -> None:
+        """Store EUAT access token on session state and cookie jar."""
+        value = str(token or "").strip()
+        if not value:
+            return
+        self.state.euat_token = value
+        try:
+            self.client.cookies.set(
+                EUAT_COOKIE_NAME,
+                value,
+                domain=".paypal.com",
+                path="/",
+            )
+        except Exception:
+            try:
+                self.client.cookies.set(EUAT_COOKIE_NAME, value)
+            except Exception:
+                pass
+
     def export_cookies_for_browser(self) -> list[dict[str, Any]]:
         """Export current HTTP-session cookies in Playwright add_cookies shape."""
         exported: list[dict[str, Any]] = []
