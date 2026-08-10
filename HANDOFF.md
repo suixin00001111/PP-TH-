@@ -1,335 +1,208 @@
 # PP-TH 项目交接文档（Handoff）
 
-> 本文档写给**接手的 AI/工程师**，用于理解项目现状、架构约定、已知问题与待优化方向。
-> 最后更新：2026-08-10（升权模式 + 在线地址 + 44 国地址池；§7 服务器部署仍有效）
+> 写给接手的 AI/工程师：现状、架构、风险与约定。  
+> 最后更新：2026-08-10  
+> **表述原则**：只描述本仓库自身能力与行为。
 
 ---
 
 ## 1. 项目概览
 
-**PP Multi（仓库名 PP-TH）**：本地可运行的多国 **PayPal Billing Agreement 协议支付**实现。以**纯 HTTP 状态机为主**，可叠加本地 Headless（Playwright）浏览器做风控辅助，不依赖远端 job 平台。
+**PP Multi（仓库名 PP-TH）**：本地可运行的多国 **PayPal Billing Agreement** 实现。以 **纯 HTTP 状态机**为主，可叠加 Headless（Playwright）/ Roxy 做风控辅助；自带 Web 与 CLI，**不依赖**远端 job 平台。
 
 - 仓库：`https://github.com/suixin00001111/PP-TH-`
-- 技术栈：Python 3.10+（生产环境 3.11）、httpx/curl_cffi、loguru、Playwright（可选）、自建 Web UI（标准库 http.server）
+- 技术栈：Python 3.10+（生产常见 3.11）、httpx/curl_cffi、loguru、Playwright（可选）、标准库 `http.server` Web UI
 - 支持国家：**44**（`GET /api/regions` / `list_regions_public()`）
-- 核心设计：**"多国协议绑定"**——选中国家后绑定该国的 `ProtocolContext`（locale/区号/证件/地址样式/语言），生成的姓名/城市/街道/邮编/手机区号**必须对应所选国家**
-- 现行能力：**elevate_bind 升权**、**OSM 在线地址**、**44 国 ADDRESS_POOLS**；Web 风控三项**可选**（非锁死只读）
+- 核心设计：选中国家后绑定该国 `ProtocolContext`；姓名/城市/街道/邮编/区号**必须对应该国**
+- 现行能力：`elevate_bind` 升权、OSM 在线地址、44 国 `ADDRESS_POOLS`；Web 风控三项**可选**
 
-### 核心概念（务必分清）
+### 核心概念
 
 | 概念 | 含义 |
 |------|------|
-| 泰国 TH | **流程参考**：Phase 0-4 状态机以泰国实现为蓝本 |
-| 各国协议 | 选中国家 → 绑定 `ProtocolContext`（locale/区号/证件/地址样式） |
-| 生成资料 | 姓名/城市/街道/邮编/区号必须对应所选国家，不会把泰国资料填进别的国家 |
-| 巴西 BR | **风控深度参考**：风控信号/浏览器 runtime 以 openai-paypal（巴西深度版）为蓝本 |
+| 协议国家 | 选中国家 → 绑定该国 `ProtocolContext` |
+| 生成资料 | 不得串用其它国家姓名/地址/区号 |
+| 证件 | 按国别规则（如 `BR` 提交 CPF）；多数国家不强制 |
 
 ---
 
 ## 2. 快速上手
 
-### 本地 / 服务器运行
-
 ```bash
-# 安装依赖
 pip install -r requirements.txt
-# 可选 headless 风控
+# 可选 headless
 pip install -r requirements-headless.txt && python -m playwright install chromium
 
-# Web UI（推荐，含任务面板/OTP 交互/日志实时流）
 python web.py --host 0.0.0.0 --port 8080
 
-# CLI 单跑
-python main.py --ba-token BA-xxx --phone +66xxxxxxxxx --country TH \
-  --runtime headless --buyer-mode elevate_bind
+python main.py --ba-token BA-xxx --phone +81xxxxxxxxx --country JP \
+  --runtime protocol --buyer-mode elevate_bind
 ```
 
-### 环境变量（.env 或环境）
+### 环境变量（摘要）
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `PAYPAL_FINGERPRINT_SOURCE` | random | 指纹来源：random/roxy/headless/auto |
-| `PAYPAL_DATADOME_MODE` | protocol | DataDome：protocol/roxy/headless/auto/off |
-| `PAYPAL_MTR_RUNTIME` | python_generated | MTR sealedResult：python_generated/roxy/headless/auto/off |
-| `PAYPAL_RISK_SIGNALS_MODE` | protocol | signup 前风控：roxy/headless 等（对齐母版后 protocol 归 headless） |
-| `PAYPAL_PROXY_ENABLED/URL/POOL` | - | 代理开关/单条/代理池 |
-| `PAYPAL_SMSBOWER_API_KEY` | - | 自动接码（可选） |
+| `PAYPAL_FINGERPRINT_SOURCE` | random | random / headless / roxy / … |
+| `PAYPAL_DATADOME_MODE` | protocol | protocol / headless / roxy / … |
+| `PAYPAL_MTR_RUNTIME` | python_generated | python_generated / headless / roxy / … |
+| `PAYPAL_RISK_SIGNALS_MODE` | protocol | signup 前风控引擎 |
+| `PAYPAL_PROXY_*` | - | 代理开关 / URL / 池 |
+| `PAYPAL_ONLINE_ADDRESS` | `1` | `1`=OSM 优先；`0`=仅本地池 |
 | `PAYPAL_WEB_OTP_TIMEOUT_SECONDS` | 1800 | Web 等验证码超时 |
-| `PAYPAL_ONLINE_ADDRESS` | `1` | `1`=OSM 在线地址优先；`0`=仅本地 `ADDRESS_POOLS`（CI/弱网建议 0） |
+| `SMSBOWER_*` / `PAYPAL_ROXY_*` | - | 可选接码 / Roxy |
+
+完整见 `.env.example`、[SETUP.md](./SETUP.md)。
 
 ---
 
 ## 3. 代码库地图
 
-### 根目录
-| 文件 | 职责 |
+| 路径 | 职责 |
 |------|------|
-| `main.py` | CLI 入口（--ba-token/--phone/--country/--runtime/--buyer-mode 等） |
-| `web.py` | Web UI 服务：任务管理、OTP 交互、日志流、代理/风控测试接口 |
-| `config.py` | 全局配置 + 多国画像常量 |
-| `requirements*.txt` | 依赖清单（headless 版本见 §7 坑） |
-| `SETUP.md` / `README.md` / `PROXY.md` / `SANITIZATION.md` / `PROTOCOL_CHAIN.md` / `REVERSE_NOTES.md` | 部署/说明/代理/脱敏/协议链/逆向笔记 |
-
-### paypal/ 核心模块
-| 模块 | 职责 |
-|------|------|
-| `flow.py` | **核心状态机**（Phase 0-4 + 重试 + elevate_bind 分支）约 8000 行 |
-| `elevation_flow.py` | **升权专用** `IdentityElevationPayPalFlow`：Guest 升权、绑 EC、BUYER_* GraphQL、严格 EC 门控 |
-| `online_address.py` | OSM Nominatim/Overpass 在线地址 + 磁盘缓存；`PAYPAL_ONLINE_ADDRESS` 开关 |
-| `protocol.py` | 多国 ProtocolContext（locale/区号/证件/地址样式） |
-| `regions.py` / `region_matrix.py` | 国家归一化 / 国家矩阵 |
-| `country_profiles.py` | **44 国 `ADDRESS_POOLS`** + 卡 BIN / 电话规则；表单安全 ASCII 街道 |
-| `oaipy_data.py` | 资料入口：`generate_address` = 在线 → 池 → Faker；姓名/证件 |
-| `proxy.py` / `proxy_bridge.py` | 代理解析/池/诊断 + SOCKS5 认证本地 HTTP 桥 |
-| `fingerprint.py` | 程序合成浏览器指纹（random 模式） |
-| `roxy_fingerprint.py` | Roxy 浏览器指纹捕获（Local API） |
-| `local_headless.py` | Playwright headless 指纹/DataDome/MTR/签名上下文（**已重建为母版版本**，仅加 proxy_bridge 桥） |
-| `mtr.py` | MTR dfp.js sealedResult 生成/回灌 |
-| `session.py` | HTTP 会话（httpx + curl_cffi + 风控 header 注入 + `set_euat_token`） |
-| `runtime_config.py` | runtime 模式映射（real/test profile → 各模式默认值） |
-| `runtime_bridge.py` | 运行时桥（datadome/风险信号跨模式分发） |
-| `smsbower.py` / `smsbower_countries.py` | 自动接码 + 国家映射 |
-| `analytics.py` / `tealeaf.py` / `traffic_recorder.py` | 遥测/Tealeaf/流量录制 |
-| `graphql.py` | GraphQL（含 `BUYER_CONTEXT_QUERY` / `BUYER_FUNDING_CONTEXT_QUERY`） |
-| `models.py` | 数据模型（UserInfo/CardInfo/BillingAddress/SessionState/WebJob） |
-| `merchant_complete.py` / `b_layer_handoff.py` / `layer_status.py` | 商户完成/B 层交接/分层状态 |
-
-### web_static/（Web UI 前端）
-| 文件 | 职责 |
-|------|------|
-| `index.html` | 页面结构（任务表单、OTP 面板、日志、结果面板） |
-| `app.js` | 前端逻辑（轮询/渲染/交互） |
-| `app.css` | 样式 |
-
-### tests/（16 个测试文件，当前 61 个用例全绿）
-覆盖：流程状态守卫、国家画像保真、JP/TH 画像、协议上下文、手机号归一化、session authchallenge、runtime 桥、买家身份模式、代理辅助函数等。
+| `main.py` / `web.py` / `config.py` | CLI、Web、配置 |
+| `paypal/flow.py` | 状态机 Phase0–4 + 重试 + elevate 分支 |
+| `paypal/elevation_flow.py` | `IdentityElevationPayPalFlow` 升权 |
+| `paypal/online_address.py` | OSM 在线地址 + 缓存 |
+| `paypal/country_profiles.py` | 44 国 `ADDRESS_POOLS` / BIN / 电话 |
+| `paypal/oaipy_data.py` | 资料入口（在线→池→Faker） |
+| `paypal/protocol.py` / `regions.py` | 协议上下文 / 国家目录 |
+| `paypal/session.py` / `proxy.py` / `proxy_bridge.py` | HTTP、代理、SOCKS 桥 |
+| `paypal/graphql.py` | 含 BUYER_* 等查询 |
+| `paypal/local_headless.py` / `roxy_fingerprint.py` | 可选浏览器辅助 |
+| `web_static/` | 控制台 UI |
+| `tests/` | 单测（buyer / online_address / pools / proxy / ssl 等） |
+| `deploy/install.sh` | VPS 一键安装 |
 
 ---
 
-## 4. 核心流程（Phase 0-4）
+## 4. 核心流程（Phase 0–4）
 
-```
-Phase 0  Initial page load     加载 agreements/approve，处理 DataDome 403，
-                                提取 ctxId/ssrt/ModXO action ids/EC token
-Phase 2  Create account flow   ModXO server-action（Pay_With_Card → createAccount），
-                                拿到 onboardingRedirectUrl → 提取 EC token
-Phase 3  Signup + 2FA          idapps OTP challenge → InitiateRiskBased2FA → 发短信
-                                → Confirm（OTP）→ SignUpNewMember（建号+绑卡）
-Phase 4  Final authorization   Hagrid/Hermes review → authorize mutation
-                                （BUYER_NOT_SET 时重载上下文重试）
+```text
+Phase0  协议页加载 / DataDome 边缘 / ModXO action ids
+Phase1  指纹 + Tealeaf + analytics（在 Phase2 之前）
+Phase2  ModXO → EC / signup URL
+Phase3  OTP + SignUpNewMember
+Phase4  授权
+        · legacy：review/Hagrid 绑定 buyer
+        · elevate_bind：升 Guest → 绑 EC → authorize
 ```
 
-**Buyer 身份模式（`buyer_identity_mode`）**——Web 下拉/CLI `--buyer-mode`/API：
-- `legacy`（默认/原版）：Phase 4 由 Hagrid 上下文绑定 buyer
-- `elevate_bind` / `identity_elevation`（注册后升 Guest、绑 EC 再授权）：
-  实现类 `IdentityElevationPayPalFlow`（`paypal/elevation_flow.py`）  
-  `_elevate_guest_identity()` → `_bind_buyer_to_current_ec()` → `_phase4_authorize(skip_initial_hagrid=True)`  
-  Web 任务在 elevate 时选 `WebElevationPayPalFlow`
-- 别名映射在 `flow.py _normalize_buyer_identity_mode` 和 `web.py` 各一份（注意同步）
-- 前端 `web_static`：下拉 `elevate_bind`，展示标签「升Guest绑EC」
+**Buyer 模式**：Web / CLI `--buyer-mode` / API `buyer_identity_mode`  
+- `legacy`（默认）  
+- `elevate_bind`（别名 `identity_elevation` 等）→ `WebElevationPayPalFlow` / `IdentityElevationPayPalFlow`  
+别名在 `flow.py` 与 `web.py` 各有归一逻辑，改时需同步。
 
-**地址生成（2026-08-10）**：
-1. `paypal/online_address.py`：Nominatim 优先，失败再 Overpass；按国缓存
-2. `ADDRESS_POOLS`：**44 国全覆盖**（补齐 MY PH NZ ES IT SE PL PT IE CH AT BE DK NO FI IN AE SA IL TR RU ZA AR CL CO PE 等，消除 Faker 占位垃圾）
-3. `PAYPAL_ONLINE_ADDRESS=0` 可强制离线池（单元测试/弱网冒烟用）
+**地址**：OSM（可关）→ `ADDRESS_POOLS` → Faker。
 
-**重试体系**：
-- 卡片重试：`_signup_with_card_retry`（max_card_attempts=5，卡被拒换新卡）
-- 全流程重试：`run()` 外层（max_flow_attempts），`_should_retry_full_flow_exception`
-- 拒号处理：`web.py _confirm_phone_with_retry` → `wait_for_input` 等待用户在 UI 输新号
+**重试**：换卡 `max_card_attempts`；全流程 `max_flow_attempts`；拒号可 Web 换号。
 
 ---
 
-## 5. 风控信号三引擎（对齐母版）
+## 5. 风控三引擎
 
-三个维度各自独立，可分别选 engine：**纯协议（默认）/ Roxy / Headless**，`auto` 自动降级。
+| 维度 | 纯协议 | Headless | Roxy |
+|------|--------|----------|------|
+| 指纹 | random 模板 | Playwright | Local API |
+| DataDome | protocol | Playwright | Local API |
+| MTR | python_generated | Playwright | Local API |
 
-| 维度 | 默认（纯协议） | Roxy | Headless |
-|------|---------------|------|----------|
-| 浏览器指纹 `FINGERPRINT_SOURCE` | random：程序合成 UA/canvas/WebGL 模板 | Local API 开指纹窗口读真实信号 | Playwright 读 runtime 信号 |
-| DataDome `DATADOME_MODE` | protocol：提取 clientid + 注入 header + 空 token POST | 真实 Chrome 跑 challenge 回灌 cookie | 同 Roxy（本地无头） |
-| MTR `MTR_RUNTIME` | python_generated：模板生成 sealedResult POST /mtr/x0 | 加载 dfp.js 监听真实 x0 回灌 | Playwright 执行 dfp.js |
+服务器 `install.sh` 常把 `.env` 写成纯协议默认；Web 表单仍可改选。  
+`create_job` **尊重客户端**传入的三项（校验合法后），不要擅自锁死。
 
-**注意**：对齐母版后，`_signup_context_risk_mode()` 只返回 roxy/headless（protocol 配置也归 headless）——signup 前风控信号**默认走 headless 浏览器**（需 Playwright）。
+### 实现约定（勿随意回退）
 
----
-
-## 6. 与母版 openai-paypal 的关系（关键背景）
-
-- 母版：`openai-paypal`（巴西单国深度版）——**行为基准**
-- 本仓库：多国版——**以母版为 A 层参考机，对齐"行为逻辑"，保留"多国化"**
-
-### 已对齐（2026-08-06 完成，勿回退）
-1. `build_proxy_config`：enabled=False 显式优先；enabled=None 时 custom 隐式启用；读 .env
-2. `load_proxy_pool`：PAYPAL_PROXY_URL > PAYPAL_PROXY_POOL > config.PROXY_POOL，移除系统代理兜底
-3. `_signup_context_risk_mode`：只返回 roxy/headless（protocol 归 headless）
-4. ModXO 流程：**跟随所有重定向**（无 fail-fast），异常仅 warning 后 fallback legacy POST
-5. Phase 0：DataDome challenge 后**继续**（不硬停），协议空 token POST 一次
-6. signup payload：crsData=None、不 omit null、DOB 无默认（空返回 {}）、firstName/lastName 直接取
-7. token 提取：只认 `accessToken` 键
-8. 重试策略：无 non_retry_markers，错误消息母版格式
-9. `local_headless.py`：**用母版版本重建**（仅保留 proxy_bridge SOCKS5 认证桥）
-10. roxy：https→HTTPS 映射、无 allow_noproxy raise、额度不足直接复用旧窗口
-11. `ProxyEntry.url/label`：username **或** password 非空即带认证
-12. `resolve_outbound_proxy`：用户填写优先，系统代理仅回退
-
-### 保留的多国化特性（勿删）
-- regions/protocol/oaipy_data/country_profiles 资料生成
-- identityDocument 按国家（仅 BR 发 CPF）
-- 地址格式、手机号归一化、SMSBower 国家映射、config 多国画像
-- 显式 protocol 模式的纯 HTTP 路径（PP-TH 核心设计，README 明确）
-- proxy_bridge（socks5 auth 本地桥）
-
-### 与母版的剩余差异（均为多国化必需/新增功能，非行为偏离）
-- flow.py：多国协议绑定、elevate_bind 分支（母版无）、诊断写 JSON、TH 地址清洗
-- proxy.py：多格式解析、diagnose、系统代理读取（新增功能）
-- web.py / main.py / config.py：多国配置与 CLI/Web 重构
+1. 用户填写代理优先；未填且不 require → **direct**  
+2. ModXO 跟随重定向；异常可 warning 后 fallback  
+3. Phase0 DataDome 后可继续协议路径  
+4. signup：crsData=None、姓名直接取、token 认 `accessToken`  
+5. 保留 proxy_bridge、多国资料、elevate、在线地址  
 
 ---
 
-## 7. 服务器部署与运维（CentOS 7 注意）
+## 6. 服务器部署与运维
 
-### 7.1 服务器基础信息
+一键路径见 [DEPLOY.md](./DEPLOY.md)（`deploy/install.sh`，systemd `pp-th`，`:8080`）。
+
+### 手工 CentOS 7 笔记（历史环境，仍可能有效）
 
 | 项 | 值 |
 |----|----|
-| IP | `156.238.252.168` |
-| 系统 | CentOS Linux 7（内核 3.10.0-957.el7），GLIBC **2.17**（决定很多坑） |
-| 配置 | 16 核 / 15G 内存 / 100G 磁盘（约 99G 可用） |
-| 登录 | `root` + 密码（SSH 22；密码在用户手里，文档不写明文） |
-| 项目位置 | `/opt/pp-th`（61 个文件，2026-08-07 上传） |
-| 其他 | 服务器上另有 `/opt/zkky`（用户其他项目，与本项目无关，勿动） |
+| 示例 IP | `156.238.252.168`（以实际为准） |
+| 系统 | CentOS 7，GLIBC 2.17 |
+| 项目目录 | `/opt/pp-th` |
+| Python | 常见为 conda env `/opt/pp-th/.condaenv`（3.11） |
+| 旧 Miniconda | 新版 Miniconda 可能要 GLIBC≥2.28，系统 yum python3 过旧 |
 
-### 7.2 服务器上部署了什么（2026-08-07 完成）
-
-**Python 运行时**：`/opt/pp-th/.condaenv`（**Python 3.11.13** + pip 26.1.2）
-- 安装路径（CentOS 7 专用，照抄即可）：旧版 Miniconda `Miniconda3-py38_4.12.0-Linux-x86_64.sh` → `/opt/miniconda3` → `conda create -p /opt/pp-th/.condaenv python=3.11`
-- **为什么不用新版 Miniconda / 系统 python3**：新版 Miniconda 要求 GLIBC≥2.28（系统只有 2.17）；系统 yum 的 python3 是 3.6.8（项目需要 3.10+ 语法）
-
-**Python 依赖**（已装，`/opt/pp-th/.condaenv`）：
-- `requirements.txt`：httpx[http2]、loguru、requests、faker、unidecode、pako、curl_cffi
-- `requirements-headless.txt`：**playwright==1.30.0**（固定版本，见下）+ greenlet 3.2.5
-- 安装坑：greenlet 不能源码编译（gcc 4.8.5 太老），必须 `pip install --only-binary=:all: greenlet` 用预编译 wheel
-
-**Playwright + Chromium**（headless 风控用）：
-- Chromium 110（`~/.cache/ms-playwright/`，playwright 1.30 自带版本），headless 启动验证通过（`LAUNCH_OK`）
-- **必须固定 playwright==1.30.0**：新版 playwright 的 node driver 需要 GLIBC_2.25/2.28，CentOS 7 跑不了（实测 1.40/1.48 全部报 `GLIBC_2.28 not found`）
-- 注意：`requirements-headless.txt` 里写的 `playwright>=1.40.0` 与服务器不符——**重装环境时必须改成 `playwright==1.30.0`**
-
-**系统软件（yum 装的）**：
-- 基础：python3(3.6.8，作为 conda 之外的备胎)、git、unzip、curl、gcc、gcc-c++、make
-- Chromium 运行依赖：at-spi2-atk、at-spi2-core、libxkbcommon、alsa-lib、pango、cairo、mesa-libgbm、nss 等（缺库时 Chromium 启动会报 `Missing libraries`）
-
-**服务器上已有的 Chrome 125**：`/opt/chrome125/chrome-linux64/chrome`（独立安装的 Chrome 125，**非本项目 playwright 装的**；项目 headless 用的是 playwright 的 Chromium 110）。交接时注意区分，别混淆。
-
-**Web 服务**：web.py 常驻 8080，公网可访问 `http://156.238.252.168:8080`
-
-### 7.3 Web 服务运维命令
+Headless 在 CentOS 7 上常需 **`playwright==1.30.0`**（新 driver 要更高 GLIBC）。  
+`requirements-headless.txt` 若写 `>=1.40`，重装时注意与系统匹配。
 
 ```bash
+# 若未用 systemd，手工示例：
 PY=/opt/pp-th/.condaenv/bin/python
 cd /opt/pp-th
-
-# 启动（setsid 脱离会话；重启服务器后必须手动重启）
 setsid $PY web.py --host 0.0.0.0 --port 8080 </dev/null >>/tmp/ppweb.log 2>&1 &
-
-# 停止（清空所有内存态任务）
-pkill -f 'web.py --host 0.0.0.0 --port 8080'
-
-# 重启 = 先停后启（内存任务会丢失，属正常）
-# 查看日志
-tail -f /tmp/ppweb.log
-# 健康检查
-curl -s http://127.0.0.1:8080/api/health   # -> {"ok":true,...}
 ```
 
-### 7.4 已部署的前端修复（勿回退/勿覆盖）
-- `web_static/app.js`：加了 `setInterval(() => { if (state.currentJobId) pollCurrent(false); }, 3000)`（3 秒轮询当前任务，等待输入面板自动弹出）
-- `web_static/index.html`：静态资源带版本号（`/static/app.js?v=2`、`app.css?v=2`，防浏览器缓存旧 JS）
-- **改动前端后记得递增 `?v=2` → `?v=3`**，否则浏览器缓存会导致"改了不生效"
-
-### 7.5 服务器上验证过的状态（2026-08-07）
-- 61 个单元测试全部通过（`python -m unittest discover -s tests`）
-- `compileall` 全模块通过
-- headless Chromium 启动 + 访问 paypal.com 成功
-- Web `/api/health` 正常；泰国 BA 任务 Phase 0-2 实机跑通（德国任务卡在 PayPal 拒号，非程序问题，见 §9）
-
-### 7.6 运维注意
-- **SSH 链路不稳定**（延迟波动 191-827ms）：用 paramiko 需 `banner_timeout=30` + 重试 5-6 次；直接 ssh 会偶发 `Error reading SSH protocol banner`
-- **任务为内存态**：web.py 重启即丢失所有任务；`/api/jobs` 按浏览器 cookie（device_id）隔离，curl 不带 cookie 查不到任务（属正常）
-- 本地代理端口 `127.0.0.1:10808`：项目 proxy_bridge 或用户代理在用，headless Chromium 挂它上面属正常
+任务为**内存态**；`/api/jobs` 按 cookie `paypal_web_device_id` 隔离。  
+SSH 不稳定时注意 banner 超时与重试。
 
 ---
 
-## 8. 测试与验证
+## 7. 测试与验证
 
 ```bash
 PAYPAL_ONLINE_ADDRESS=0 python -m unittest discover -s tests
 python -m compileall -q paypal web.py main.py config.py
 ```
 
-- 服务器验证过（2026-08-07）：61 测试通过、compileall 通过、headless 启动 `LAUNCH_OK`（Chromium 110）
-- **2026-08-10 本地冒烟**（假 BA，关在线地址）：
-  - 关键单测（buyer / online_address / country_profiles / web_helpers / flow_guards / regions_phone）通过
-  - 44 国 `ADDRESS_POOLS` + `IdentityElevationPayPalFlow` 构造 **44/44**
-  - `create_job(elevate_bind)`：Phase0→Phase2，假 BA 无 EC → `failed`（**不卡死**）
-  - HTTP `POST /api/jobs`：`identity_elevation` 归一为 `elevate_bind`；**phone 区号须匹配 country**
-- 新功能必须配套测试（`tests/test_buyer_identity_mode.py`、`tests/test_online_address.py`）
+2026-08-10 本地冒烟（假 BA）：关键单测通过；44 国构造 44/44；`elevate_bind` 到 Phase2 失败收尾不卡死；HTTP `identity_elevation` → `elevate_bind`；**phone 区号须匹配 country**。
 
 ---
 
-## 9. 已知问题与风险（重要）
+## 8. 已知问题与风险
 
-1. **PayPal 拒号 NUMBER_NOT_SUPPORTED**（高频痛点）：
-   - 德国 015x 号段、接码平台虚拟号被 PayPal 硬拒（authId/challengeId 为 null，验证码根本没发）
-   - 建议：用真实 SIM 号、或换巴西/泰国（容忍度高）、或换干净代理 IP；**不要在同一 IP 连续换号重试**（风控累积）
-2. **recaptcha authchallenge**：signup 页可能遇到 reCAPTCHA，当前外部 solver 禁用，仅 warning 继续——走到 SignUpNewMember 时可能被拦（潜在阻塞点）
-3. **BA token 单次/短时效**：同一 token 用第二次可能返回 generic-error（ModXO countries 403）
-4. **playwright 1.30 限制**：CentOS 7 只能装 1.30.0（Chromium 110），`requirements-headless.txt` 写的 `>=1.40.0` 与服务器不符——**若重装环境需固定 `playwright==1.30.0`**
-5. **Web 任务为内存态**：重启 web.py 即丢失所有任务；`/api/jobs` 按浏览器 cookie（device_id）隔离
-6. **elevate_bind 全链路依赖真实 BA**：单元测试 + 假 BA 冒烟覆盖到 Phase2 失败收尾；**Phase 3+4 升权绑 EC 成功**需真实 BA + 该国号 + 可用出口。巴西等国在真实环境下曾跑通业务侧，勿用 `BA-TEST…` 误判为程序卡死
-7. **在线地址依赖外网**：Nominatim/Overpass 超时会拖慢 `generate_address`；冒烟/CI 设 `PAYPAL_ONLINE_ADDRESS=0`
-8. **HTTP 建任务 phone/country 一致性**：BR 任务不能填 `+66…`，否则 400
+1. **NUMBER_NOT_SUPPORTED**：部分号段/虚拟号被拒；换真实 SIM、换出口 IP；避免同 IP 狂换号  
+2. **authchallenge / reCAPTCHA**：外部 solver 默认禁用，可能卡在注册  
+3. **BA 短时效**：同一 token 复用易 generic-error  
+4. **老系统 Playwright 版本**与 GLIBC 限制  
+5. **Web 任务内存态**，重启即丢  
+6. **elevate_bind 全成功**依赖真实 BA + 该国号 + 可用出口；假 BA 只能验到 Phase2  
+7. **OSM 超时**：CI/弱网设 `PAYPAL_ONLINE_ADDRESS=0`  
+8. **phone/country 不一致** → 创建任务 400  
 
 ---
 
-## 10. 待优化 / 设计方向（参考竞品 PAY.153）
+## 9. 待优化方向（产品）
 
-竞品：`https://pay.153.ink/paypal-pay/`（协议支付工作台，功能参考）
-
-| 优先级 | 方向 | 说明 |
-|--------|------|------|
-| 高 | ① 验证码人工操作面板 | 服务器临时 Chromium + 实时画面流（点击/输入/滚动/Tab/Enter），或粘贴 datadome cookie/adsddtoken 跳过验证——解决 DataDome/hCaptcha 人工验证（API 可参考：`/jobs/{id}/browser/frame` + `/browser/action`） |
-| 中 | ② Braintree Vault 生成 BA 链接 | `buyerCountry/locale/vault=true/intent=tokenize/fundingSource=paypal`，从源头生成 BA 授权链接（Grok 订阅场景） |
-| 中 | ③ 拒号自动换号策略 | 拒号时自动换候选号/换国家重试（当前是等人工输入） |
-| 低 | ④ 代理池 UI + 成功统计面板 | 多行代理粘贴/随机选择/不落盘；今日成功/平均耗时/24h 时间线 |
+| 优先级 | 方向 |
+|--------|------|
+| 高 | 验证码人工操作面板 / cookie 粘贴跳过 |
+| 中 | 从商户侧生成 BA 链接、拒号自动换号 |
+| 低 | 代理池 UI + 成功率统计 |
 
 ---
 
-## 11. 工作约定（用户偏好，请遵守）
+## 10. 工作约定
 
-1. **行为对齐母版**：修改风控/重试/流程逻辑前，先对照母版 `openai-paypal` 的行为；"增强"需用户拍板
-2. **多国化不可破坏**：任何改动不能破坏 **44 国**资料与 `ADDRESS_POOLS` 一致性
-3. **改代码必须配套测试**：`PAYPAL_ONLINE_ADDRESS=0 python -m unittest discover -s tests`
-4. **CLI/Web/前端参数要同步**：新增模式时同步 `flow.py` + `web.py` + `index.html`/`app.js`（含 buyer 别名）
-5. **Web UI 缓存**：静态资源若带 `?v=`，改前端后递增版本号
-6. 交互操作：任务等待验证码时走 `wait_for_input`/Web UI 输入，勿在服务器用 stdin
-7. 服务器凭据与代理信息属于敏感信息，交接/文档中不要写明文
-8. **文档与代码同步**：勿再写「Web 强制锁定巴西纯协议三项、无 Headless 下拉」——当前 UI **可选**；服务器 `.env` 仅**默认**纯协议（见 `DEPLOY.md` / `AI_HANDOFF.md`）
+1. 改风控/流程前先读现有 `flow.py` / 单测；「增强」需用户拍板  
+2. 不得破坏 44 国资料与 `ADDRESS_POOLS` 一致性  
+3. 改代码配套测试：`PAYPAL_ONLINE_ADDRESS=0 python -m unittest discover -s tests`  
+4. CLI / Web / 前端参数同步（含 buyer 别名）  
+5. 静态资源若带 `?v=`，改 UI 后递增  
+6. OTP 走 Web `wait_for_input`，勿在服务器 stdin 堵死  
+7. 文档与密钥：不写明文代理/密码；说明只写本仓库现行行为 
+8. Web 风控为**可选**；服务器 `.env` 仅**默认**纯协议  
 
 ---
 
-## 12. 2026-08-10 变更摘要（同步仓库）
+## 11. 2026-08-10 变更摘要
 
 | 主题 | 内容 |
 |------|------|
-| Identity elevation | `elevation_flow.py`、GraphQL BUYER_*、`session.set_euat_token`、Web 选流 |
-| Online address | `online_address.py`、`PAYPAL_ONLINE_ADDRESS`、`generate_address` 路由 |
-| Address pools | `country_profiles.ADDRESS_POOLS` 补齐 44 国 + ASCII/邮编修正 |
-| 文档纠偏 | 全量 md 与现行 Web（可选风控 + 升权 + 44 国）对齐；废弃「仅巴西锁定」表述 |
+| Identity elevation | `elevation_flow.py`、BUYER_*、Web 选流 |
+| Online address | `online_address.py`、`PAYPAL_ONLINE_ADDRESS` |
+| Address pools | 44 国 curated 池 |
+| 文档 | 全量 md 与现行行为对齐 |
 
-用户文档入口：`README.md` · `SETUP.md` · `PROTOCOL_CHAIN.md` · `PROXY.md` · `DEPLOY.md` · `AI_HANDOFF.md`。
-
----
-
-*交接更新：2026-08-10（升权/地址/文档纠偏）。服务器 §7 手工 CentOS 笔记仍有效；一键部署以 `DEPLOY.md` + `install.sh` 为准。*
+入口：`README.md` · `SETUP.md` · `PROTOCOL_CHAIN.md` · `PROXY.md` · `DEPLOY.md` · `AI_HANDOFF.md`。

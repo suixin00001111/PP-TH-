@@ -436,7 +436,7 @@ function setSelectIfValid(sel, value, fallback) {
 }
 
 function normalizeFingerprintSource(v) {
-  // Default headless (母版可跑通). random | headless | roxy
+  // Default headless. random | headless | roxy
   const x = String(v || "headless").trim().toLowerCase().replace(/-/g, "_");
   if (x === "random" || x === "program" || x === "python" || x === "synthetic") return "random";
   if (x === "roxy" || x === "browser" || x === "roxy_browser") return "roxy";
@@ -446,7 +446,7 @@ function normalizeFingerprintSource(v) {
 
 
 function normalizeDatadomeMode(v) {
-  // Default headless (母版可跑通). protocol | headless | roxy
+  // Default headless. protocol | headless | roxy
   const x = String(v || "headless").trim().toLowerCase().replace(/-/g, "_");
   if (x === "protocol" || x === "edge" || x === "off") return "protocol";
   if (x === "roxy" || x === "browser") return "roxy";
@@ -456,7 +456,7 @@ function normalizeDatadomeMode(v) {
 
 
 function normalizeMtrRuntime(v) {
-  // Default headless (母版可跑通). python_generated | headless | roxy
+  // Default headless. python_generated | headless | roxy
   const x = String(v || "headless").trim().toLowerCase().replace(/-/g, "_");
   if (x === "python_generated" || x === "python" || x === "protocol" || x === "block" || x === "off") return "python_generated";
   if (x === "roxy" || x === "browser") return "roxy";
@@ -586,7 +586,7 @@ function getRuntimePayload() {
 
 function loadRuntimePrefs() {
   try {
-    // Default headless stack (aligned with openai-paypal runnable path).
+    // Default headless stack.
     // Clear legacy sticky protocol/random prefs so UI stays headless-first.
     try {
       localStorage.removeItem(FP_KEY);
@@ -606,7 +606,7 @@ function loadRuntimePrefs() {
 
 function saveRuntimePrefs() {
   try {
-    // Do not persist fingerprint/datadome/mtr (Brazil behavior).
+    // Do not persist fingerprint/datadome/mtr across sessions.
     localStorage.setItem(PROFILE_KEY, "real");
     localStorage.setItem(MERCHANT_KEY, "0");
     if ($("#smsbowerEnabled")) {

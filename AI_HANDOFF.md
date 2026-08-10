@@ -3,14 +3,15 @@
 > **Audience:** another coding agent continuing this repo.  
 > **Repo:** https://github.com/suixin00001111/PP-TH-  
 > **Docs updated:** 2026-08-10  
-> **Current product facts (do not use older “Web locks Brazil trio only” notes):**  
+> **Current product facts:**  
 > 1) 44 countries + curated `ADDRESS_POOLS`  
 > 2) Online OSM address (`PAYPAL_ONLINE_ADDRESS`, default on) with local fallback  
 > 3) Buyer modes: `legacy` | `elevate_bind` (`identity_elevation` alias) via `elevation_flow.py`  
-> 4) Web **accepts** client fingerprint/DataDome/MTR choices (headless/roxy/protocol) — **not** force-locked to random/protocol only  
-> 5) Server `deploy/install.sh` still seeds **pure-protocol** `.env` defaults  
+> 4) Web **accepts** client fingerprint/DataDome/MTR choices (headless/roxy/protocol)  
+> 5) Server `deploy/install.sh` seeds **pure-protocol** `.env` defaults  
 > 6) Windows TLS CA mirror + proxy `require_proxy` only when user filled a proxy  
-> **Language:** English for machine clarity; product UI/logs often Chinese.
+> **Language:** English for machine clarity; product UI/logs often Chinese.  
+> Describe this repo on its own terms only.
 
 Read this **before** changing flow, proxy, session, elevation, address generation, or web job ownership.
 
@@ -21,7 +22,7 @@ Read this **before** changing flow, proxy, session, elevation, address generatio
 | Fact | Detail |
 |------|--------|
 | What it is | **Local** multi-country PayPal **Billing Agreement (BA)** pure-HTTP state machine + Web UI + CLI |
-| What it is **not** | Not a clone of `pay.153.ink`; not a remote job platform client |
+| What it is **not** | Not a remote job-platform client; all logic runs in this tree |
 | Countries | **44** via `GET /api/regions` / `list_regions_public()` |
 | Product line | **A-layer BA** Phase 0–4; optional B/C merchant chain (default **off**) |
 | Buyer identity | `legacy` (default) or `elevate_bind` / aliases → `IdentityElevationPayPalFlow` |
@@ -55,7 +56,7 @@ Fake tokens (`BA-TEST…`) are **smoke only**. Expect `INVALID_TOKEN` / `generic
 ### Don’t
 
 - Don’t hard-require system/Clash proxy when proxy is empty / disabled.
-- Don’t re-introduce “create_job always overwrites risk knobs to Brazil lock” unless user asks.
+- Don’t force-overwrite client risk knobs in `create_job` unless the user explicitly asks for a lock-down.
 - Don’t commit `.env`.
 - Don’t re-enable external CAPTCHA solvers if code says manual/official only.
 - Don’t assume `X-Device-Id` owns jobs — ownership is cookie **`paypal_web_device_id`**.
@@ -215,8 +216,8 @@ Key files:
 | Theme | Notes |
 |-------|--------|
 | Windows runnable | `ssl_env`, direct when no filled proxy, device cookie |
-| Brazil-public phase order | Phase1 before Phase2; dynamic ModXO preference |
-| **Superseded** Web “Brazil lock only” (`b371986` era) | UI/create_job again allow headless/roxy; docs must not claim lock-only |
+| Phase order | Phase1 risk beacons before Phase2; dynamic ModXO preference |
+| Web risk knobs | Selectable headless/roxy/protocol; server `.env` may default pure-protocol |
 | Proxy diagnose accuracy | CA on probe; no false forbidden-IP |
 | Identity elevation | `elevation_flow.py`, BUYER_* GraphQL, Web selection |
 | Online address + 44 pools | `online_address.py`, expanded `ADDRESS_POOLS` |

@@ -6,7 +6,7 @@ Priority (highest first):
 Coarse modes (UI/CLI --runtime):
   protocol | headless | auto | roxy
 
-Fine modes (openai-paypal compatible, optional overrides):
+Fine modes (optional overrides):
   PAYPAL_FINGERPRINT_SOURCE
   PAYPAL_DATADOME_MODE
   PAYPAL_MTR_RUNTIME
@@ -113,15 +113,14 @@ def map_coarse_to_fine(coarse: str) -> dict[str, str]:
 
 
 def profile_defaults(profile: str) -> dict[str, Any]:
-    """Scenario defaults: test=protocol smoke; real=headless (母版可跑通路径)."""
+    """Scenario defaults: test=protocol smoke; real=headless."""
     if profile == "test":
         return {
             "runtime_mode": "protocol",
             "continue_merchant": False,
             "traffic_record": False,
         }
-    # real: headless by default (aligned with openai-paypal runnable path).
-    # Explicit --runtime protocol/roxy or env overrides still work.
+    # real: headless by default. Explicit --runtime protocol/roxy or env still work.
     return {
         "runtime_mode": "headless",
         "continue_merchant": False,

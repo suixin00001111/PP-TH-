@@ -474,9 +474,9 @@ def _iter_system_proxy_candidates() -> list[ProxyEntry]:
 def get_system_proxy_entry() -> ProxyEntry | None:
     """Detect local system / client mixed proxy (Clash 系统代理等).
 
-    Brazil-style runs usually go out via OS/client proxy or TUN. Our multi-country
-    web previously forced a direct connection to the filled residential URL and
-    scrubbed env, so cliproxy saw the raw China IP and returned forbidden.
+    Many desktop runs go out via OS/client proxy or TUN. Forcing only the filled
+    residential URL while scrubbing env can expose the raw ISP IP to the proxy
+    vendor (e.g. cliproxy forbidden).
 
     Returns the first candidate only (compat). Prefer list_system_proxy_entries /
     resolve_outbound_proxy which probe every candidate.
@@ -641,11 +641,10 @@ def resolve_outbound_proxy(
     allow_direct_fallback: bool = True,
     timeout: float = 12.0,
 ) -> tuple[ProxyEntry | None, str, int, str]:
-    """Resolve outbound proxy (master semantics: filled proxy wins).
+    """Resolve outbound proxy (filled proxy wins when provided).
 
     Strategy:
-      - User-filled residential/custom proxy is tried FIRST (what you fill is
-        what you use, matching the openai-paypal master).
+      - User-filled residential/custom proxy is tried FIRST.
       - Local/system proxies are tried next (every open candidate, not just first).
       - If nothing was filled and proxies fail, fall back to **direct** when the
         server/machine can reach the public internet (Linux VPS common case).
@@ -674,7 +673,7 @@ def resolve_outbound_proxy(
             notes.append(f"{tag}: {exc}")
             return None
 
-    # 1) User-filled residential / custom first (master: fill what you use)
+    # 1) User-filled residential / custom first
     if filled_raw:
         try:
             filled_entry = ProxyEntry.parse(filled_raw)
@@ -708,7 +707,7 @@ def resolve_outbound_proxy(
     # Compose actionable error (Chinese)
     system_entry = system_entries[0] if system_entries else None
     parts = [
-        "出网探测失败（已按巴西用法尝试：系统代理/填写代理"
+        "出网探测失败（已尝试：系统代理/填写代理"
         + ("/直连" if allow_direct_fallback and not filled_raw else "")
         + "）。",
     ]
@@ -722,13 +721,13 @@ def resolve_outbound_proxy(
         parts.append(
             f"系统/本地代理已检测到 [{labels}]，但当前无法完成 HTTPS 出网"
             "（常见：只开了系统代理开关、未开 TUN，或本地桥接端口是残留死连接）。"
-            "巴西项目能跑，多半是开了 TUN/虚拟网卡，流量在系统层已出网。"
+            "若本机其它程序能上网，请确认已开 TUN/虚拟网卡，使流量在系统层出网。"
         )
     else:
         parts.append("未检测到本地系统代理（Clash 系统代理未开或端口未监听）。")
     parts.append(
-        "可行处理：1) 打开客户端 TUN/虚拟网卡后再跑（可清空代理框，与巴西一致）；"
-        "2) 或在 cliproxy 后台把本机公网 IP 加白名单后关 TUN 用填写代理；"
+        "可行处理：1) 打开客户端 TUN/虚拟网卡后再跑（可清空代理框）；"
+        "2) 或在代理商后台把本机公网 IP 加白名单后关 TUN 用填写代理；"
         "3) 系统代理模式需客户端本身已能浏览器正常上网；"
         "4) 服务器直连可用时，请清空代理框并关闭「强制系统代理」。"
     )
@@ -852,7 +851,7 @@ def _env_proxy_url() -> str | None:
 
 
 def load_proxy_pool() -> list[str]:
-    """Load proxy lines (master behavior): PAYPAL_PROXY_URL > PAYPAL_PROXY_POOL > config.PROXY_POOL.
+    """Load proxy lines: PAYPAL_PROXY_URL > PAYPAL_PROXY_POOL > config.PROXY_POOL.
 
     Explicit env takes priority; system-proxy fallback is intentionally removed
     so an unconfigured pool never silently falls back to local network.
@@ -887,7 +886,7 @@ def build_proxy_config(
     raw: str | None = None,
     proxy_url: str | None = None,
 ) -> ProxyConfig:
-    """Return a selected proxy config (master semantics).
+    """Return a selected proxy config.
 
     enabled=None means use config/env default.  If explicitly disabled, no proxy
     is selected — even when a custom proxy string is provided.

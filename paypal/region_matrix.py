@@ -66,7 +66,7 @@ CAPABILITY: dict[str, dict[str, Any]] = {
         "content": "solid",
         "identity": "CPF",
         "sms_mapping": "mapped",
-        "notes": "Brazil-depth risk/session reference + CPF identity + local BINs",
+        "notes": "CPF identity document + local BINs",
     },
     "GB": {
         "tier": "gold",

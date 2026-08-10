@@ -192,7 +192,7 @@ class PayPalFlow:
         raw_mode = buyer_identity_mode if buyer_identity_mode is not None else kwargs.get("buyer_identity_mode")
         self.buyer_identity_mode = self._normalize_buyer_identity_mode(raw_mode)
         self._buyer_context_bound = False
-        # --- Multi-country protocol binding (TH/JP/... + Brazil-depth runtime) ---
+        # --- Multi-country protocol binding ---
         try:
             self.runtime_resolved = resolve_and_apply(
                 runtime_mode=runtime_mode,
@@ -255,7 +255,7 @@ class PayPalFlow:
             roxy_proxy_url=self.proxy_config.url or "",
             keep_roxy_browser=keep_roxy_browser,
         )
-        # Overlay multi-country protocol knobs onto Brazil runtime profile
+        # Overlay selected-country protocol knobs onto the runtime browser profile
         try:
             proto_profile = seed_browser_profile(self.protocol)
             bp = dict(getattr(self.state, "browser_profile", None) or {})
@@ -998,11 +998,11 @@ class PayPalFlow:
         return mode
 
     def _signup_context_risk_mode(self) -> str:
-        """Resolve signup-context risk runtime (master behavior).
+        """Resolve signup-context risk runtime.
 
         Returns roxy when a Roxy runtime is requested/active, otherwise headless.
-        Protocol/off configs fall back to headless just like the openai-paypal
-        master — full browser risk signals are always emitted.
+        Protocol/off configs fall back to headless so full browser risk signals
+        are still emitted during signup.
         """
         current_mode = self._risk_signals_mode()
         requested_mode = str(getattr(self, "_requested_risk_signals_mode", "") or "")
@@ -2517,7 +2517,7 @@ class PayPalFlow:
                         # still rely on client-id header replay / session cookies.
                         logger.warning(
                             "DataDome challenge HTML still present after empty-token POST "
-                            "(status={}); continuing protocol path like openai-paypal peer.",
+                            "(status={}); continuing protocol path.",
                             int(getattr(resp, "status_code", 0) or 0),
                         )
 
@@ -5837,7 +5837,7 @@ class PayPalFlow:
         )
 
     def _billing_line1(self) -> str:
-        """Country-shaped line1 (Brazil-depth signup uses regional address form)."""
+        """Country-shaped line1 (regional address form)."""
         street = (self.address.street or "").strip()
         house = (self.address.house_number or "").strip()
         if house and (f", {house}" in street or street.endswith(house)):

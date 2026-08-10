@@ -446,7 +446,7 @@ class PayPalFlow:
                 int(getattr(resp, "status_code", 0) or 0),
                 getattr(resp, "text", "") or "",
             ):
-                # Deep DataDome path (aligned with openai-paypal Phase0)
+                # Deep DataDome path (Phase0 browser assist)
                 try:
                     from paypal.runtime_bridge import run_phase0_browser_assist, resolve_runtime_mode
                     if resolve_runtime_mode(getattr(self, "runtime_mode", None)) != "protocol":
@@ -987,7 +987,7 @@ class PayPalFlow:
             "marketingOptOut": True,
             "password": self.user.password,
             "dateOfBirth": self._dob_payload(),
-            # Regional identity: Thailand-base path uses null except BR CPF.
+            # Regional identity: only when the country protocol requires it (e.g. BR CPF).
             "identityDocument": self._identity_document_payload(),
             "crsData": None,
             "legalAgreements": {},

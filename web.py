@@ -291,7 +291,7 @@ def implicit_risk_signals_mode(
     mtr_runtime: object,
     explicit: object = "",
 ) -> str:
-    """Align with openai-paypal: derive risk mode from the three runtime knobs."""
+    """Derive risk mode from the three runtime knobs."""
     value = str(explicit or "").strip().lower().replace("-", "_")
     if value:
         return value
@@ -310,7 +310,7 @@ def implicit_risk_signals_mode(
 
 
 def derive_runtime_mode(fingerprint_source: str, datadome_mode: str, mtr_runtime: str) -> str:
-    """Coarse runtime for browser engine selection (Brazil uses fine knobs primarily)."""
+    """Coarse runtime for browser engine selection (fine knobs are primary)."""
     modes = {
         str(fingerprint_source or "").strip().lower().replace("-", "_"),
         str(datadome_mode or "").strip().lower().replace("-", "_"),
@@ -426,7 +426,7 @@ def redact_text(value: Any) -> str:
     text = re.sub(r"\bBA-[A-Za-z0-9]{8,80}\b", lambda m: mask_middle(m.group(0), 4, 4), text)
     text = re.sub(r"\bEC-[A-Za-z0-9]{8,80}\b", lambda m: mask_middle(m.group(0), 4, 4), text)
 
-    # Email, CPF, card-like long digit sequences, Thailand/international phone-like values.
+    # Email, CPF, card-like long digit sequences, international phone-like values.
     text = re.sub(
         r"\b([A-Za-z0-9._%+\-]{1,64})@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})\b",
         lambda m: mask_email(m.group(0)),
@@ -1353,9 +1353,9 @@ def create_job(
             raise ValueError("手机号不能为空（未开启 SMSBower 自动接码时必填）")
     phone = normalize_region_phone(country, phone_raw)
     profile = "real"  # Web UI is real-run only (no test/smoke profile)
-    continue_merchant = False  # A-layer only (aligned with openai-paypal; no B/C switch)
+    continue_merchant = False  # A-layer only (no B/C switch)
 
-    # Default headless fine knobs (母版 openai-paypal 可跑通路径)
+    # Default headless fine knobs
     fingerprint_source = str(fingerprint_source or "headless").strip().lower().replace("-", "_")
     datadome_mode = str(datadome_mode or "headless").strip().lower().replace("-", "_")
     mtr_runtime = str(mtr_runtime or "headless").strip().lower().replace("-", "_")
@@ -1418,7 +1418,7 @@ def create_job(
     if risk_signals_mode not in RISK_SIGNALS_MODE_CHOICES:
         risk_signals_mode = "headless"
 
-    # Coarse mode for browser engine; fine knobs are source of truth (Brazil Web).
+    # Coarse mode for browser engine; fine knobs are source of truth.
     # Only honor explicit runtime_mode if the client actually sent one.
     explicit_runtime = str(runtime_mode or "").strip().lower().replace("-", "_")
     if explicit_runtime in {"", "default"}:
@@ -1435,7 +1435,7 @@ def create_job(
         risk_signals_mode=risk_signals_mode,
         continue_merchant=False,
     )
-    # Prefer explicit fine modes (Brazil path); coarse comes from resolver/engine.
+    # Prefer explicit fine modes; coarse comes from resolver/engine.
     runtime_mode = resolved.runtime_mode or runtime_mode
     profile = "real"
     # fine knobs already validated above — keep them authoritative
@@ -1563,7 +1563,7 @@ def run_job(job: WebJob) -> None:
                 filled_raw = ""
                 if proxy_config.enabled and proxy_config.entry:
                     filled_raw = proxy_config.entry.url or ""
-                # Brazil-like: filled residential first; if provider bans China IP,
+                # Filled residential first; if provider bans current public IP,
                 # automatically use Windows 系统代理 (e.g. 127.0.0.1:7897).
                 working, exit_ip, latency_ms, note = resolve_outbound_proxy(
                     filled_raw,
@@ -1852,10 +1852,10 @@ class WebHandler(BaseHTTPRequestHandler):
                     {"value": "elevate_bind", "label": "注册后升 Guest、绑 EC 再授权"},
                 ],
                 "notes": [
-                    "Aligned with Brazil pure-protocol success path: random + protocol + python_generated",
+                    "Recommended pure-protocol defaults: random + protocol + python_generated",
                     "Roxy optional when Local API + key available",
                     "auto prefers Roxy then falls back",
-                    "retries available like Brazil Web",
+                    "Card/flow retries available on create_job",
                     "Web is real-run only; A-layer only (no merchant B/C)",
                 ],
             })

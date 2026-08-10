@@ -1,6 +1,5 @@
-"""Country protocol context derived from Brazil-depth runtime + multi-market knobs.
+"""Country protocol context: multi-market knobs on a shared BA runtime machine.
 
-Brazil (`openai-paypal`) is the deep risk / session / fingerprint reference.
 Every market reuses that A-layer machine but MUST bind its own protocol context:
 locale, language, dial code, analytics offset, identity rules, address shape,
 and signup content-identifier language — not a literal copy of BR constants.
@@ -34,7 +33,7 @@ class ProtocolContext:
     content_lang: str   # language segment inside contentIdentifier
     country_x: str      # country.x query param
     locale_x: str       # locale.x query param
-    # Brazil-depth runtime markers (shared machine, country-bound knobs)
+    # Shared runtime template id (historical field name; country knobs still bind per code)
     protocol_base: str = "BR"
     accept_language: str = ""
 
@@ -113,7 +112,7 @@ _ADDRESS_STYLE = {
 
 
 def build_protocol(country: str | None) -> ProtocolContext:
-    """Build country-specific protocol context on the Brazil-depth machine."""
+    """Build country-specific protocol context."""
     region: RegionProfile = get_region(country)
     code = region.code
     style = _ADDRESS_STYLE.get(code, "generic")
@@ -163,7 +162,7 @@ def format_billing_line2(style: str, district: str) -> str:
 
 
 def should_send_identity(code: str) -> bool:
-    """Only Brazil submits CPF identity document (Brazil package behavior)."""
+    """Whether this country submits an identity document (e.g. BR CPF)."""
     try:
         return bool(get_region(code).send_identity_document)
     except Exception:

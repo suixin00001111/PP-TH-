@@ -15,7 +15,7 @@ import os
 
 # ISO2 -> platform numeric country id
 # Source family: common sms-activate / SMSBower partner country lists.
-# Keep BR=73 as used by openai-paypal defaults.
+# Keep BR=73 (common SMS platform country id for Brazil).
 SMSBOWER_COUNTRY_IDS: dict[str, str] = {
     "RU": "0",
     "UA": "1",

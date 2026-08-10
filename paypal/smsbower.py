@@ -126,7 +126,7 @@ def normalize_phone_e164(value: object, default_cc: str = "55") -> str:
 
 
 def normalize_brazil_phone(value: object) -> str:
-    """Backward-compatible Brazil helper."""
+    """Backward-compatible BR country helper."""
     return normalize_phone_e164(value, default_cc="55")
 
 

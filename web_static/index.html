@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@400;500;600;700&family=Orbitron:wght@600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/app.css?v=3" />
+  <link rel="stylesheet" href="/static/app.css?v=4" />
 </head>
 <body>
   <div class="bg-grid" aria-hidden="true"></div>
@@ -106,7 +106,7 @@
               <option value="roxy">Roxy 浏览器执行</option>
             </select>
           </label>
-          <p class="field-hint">默认对齐母版 openai-paypal：三项全走 Headless（Playwright）。纯协议可手动切 random/protocol/python_generated；Roxy 需填 API Key。</p>
+          <p class="field-hint">默认三项为 Headless（需本机 Playwright）。纯协议可改 random / protocol / python_generated；Roxy 需填 API Key。</p>
           <label>
             <span>Buyer 身份模式</span>
             <select id="buyerIdentityMode" name="buyerIdentityMode">
@@ -293,5 +293,5 @@
   </div>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <script src="/static/app.js?v=3"></script>
+  <script src="/static/app.js?v=4"></script>
 </body>

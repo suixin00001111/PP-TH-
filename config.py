@@ -27,19 +27,19 @@ PROXY_POOL: list[str] = []
 
 # Scenario profile: test | real
 # test  -> protocol smoke (Phase0/1 path finding)
-# real  -> browser-capable defaults (headless, aligned with openai-paypal)
+# real  -> browser-capable defaults (headless)
 RUN_PROFILE = "real"
 
 # Coarse runtime: protocol | headless | auto | roxy
-# real profile default is headless (母版能跑通路径；需 Playwright)
+# real profile default is headless (needs Playwright when selected)
 RUNTIME_MODE = "headless"
 
-# Fine risk modes (openai-paypal compatible).
-# When RUNTIME_MODE is set, runtime_config maps coarse->fine unless env overrides.
-# 浏览器指纹来源（巴西 openai-paypal 同款）：
-#   random   = 程序内合成 UA/canvas/WebGL 等（纯协议，不弹浏览器）
-#   headless = 本机 Playwright 读真实 runtime（推荐，母版可跑通）
-#   roxy     = Roxy 指纹浏览器读真实 runtime
+# Fine risk modes. When RUNTIME_MODE is set, runtime_config maps coarse->fine
+# unless env overrides.
+# Fingerprint source:
+#   random   = synthetic UA/canvas/WebGL (pure protocol, no browser)
+#   headless = local Playwright real runtime
+#   roxy     = Roxy fingerprint browser
 FINGERPRINT_SOURCE = "headless"
 # DataDome：
 #   protocol = 协议边缘模拟（纯协议）
@@ -120,7 +120,7 @@ WEB_OTP_TIMEOUT_SECONDS = 1800
 WEB_MAX_LOG_LINES = 300
 
 
-# Brazil-depth extras (env can override)
+# Extra runtime knobs (env can override)
 # Prefer browser risk path for real runs
 # PAYPAL_DATADOME_PHASE0_PREFLIGHT=1
 # PAYPAL_ROXY_RUNTIME_FALLBACK=1

@@ -1,18 +1,16 @@
 # PP-TH 协议链路（多国纯 HTTP）
 
 > 更新：2026-08-10  
-> TH 仅为**状态机参考**；运行时按所选 `country` 绑定协议上下文。
+> 运行时按所选 `country` 绑定协议上下文；本仓库自包含，不依赖外部 job 平台。
 
-## 0. 外部 SaaS 对照（非依赖）
-
-`pay.153.ink` 等站点只提供远端 job API，**不是**本仓库源码来源。本包自包含：
+## 0. 控制面入口
 
 ```text
 POST /api/jobs  { ba_token|paypal_url, phone, country, proxy*, buyer_identity_mode, risk knobs… }
   → Phase0..4 / awaiting_otp / failed|completed
 ```
 
-## 1. 本包本地链路
+## 1. 本地链路
 
 ```text
 main.py / web.py
@@ -22,10 +20,10 @@ main.py / web.py
        或 IdentityElevationPayPalFlow.run()   # buyer_identity_mode=elevate_bind
       Phase0: GET /agreements/approve?ba_token=BA-...
               redirects, ssrt/cookies, DataDome 边缘处理, ModXO action ids
-      Phase1: 指纹 / Tealeaf / analytics（巴西公开包对齐：在 Phase2 之前）
+      Phase1: 指纹 / Tealeaf / analytics（在 Phase2 之前）
       Phase2: ModXO server-action → onboardingRedirect → EC token / signup URL
       Phase3: Griffin + 2FA 手机确认 + OTP + SignUpNewMember
-              （country=选中国；仅 BR 可带 CPF）
+              （country=选中国；证件字段按国别，如 BR 可带 CPF）
       Phase4: AuthorizeBillingAgreement → return_url / BA id
               · legacy：Hagrid/review 绑定 buyer
               · elevate_bind：
@@ -56,7 +54,7 @@ Web 升权任务类：`WebElevationPayPalFlow`（OTP 适配 + 升权）。
 
 ## 2. 关键 GraphQL / HTTP
 
-`paypal/graphql.py`（多国共用，参数随 country/lang）：
+`paypal/graphql.py`（参数随 country/lang）：
 
 - `CheckoutSessionDataQuery`
 - `GriffinMetadataQuery`

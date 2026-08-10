@@ -342,7 +342,7 @@ def normalize_merchant_job_result(job_result: dict[str, Any] | None) -> dict[str
     settlement_status = pick("settlement_status", "settlementStatus")
     chatgpt_cookie = pick("chatgpt_cookie", "chatgptCookie", "cookie", "cookies")
 
-    # Derive missing fields from known URLs (same idea as Brazil returnURL follow).
+    # Derive missing fields from known return / redirect URLs.
     url_pool = [return_url, final_redirect_url, verification_url, success_return_url]
     for cand in candidates:
         if not isinstance(cand, dict):

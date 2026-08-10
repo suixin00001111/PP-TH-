@@ -11,14 +11,13 @@
 
 ---
 
-## 核心概念（务必分清）
+## 核心概念
 
 | 概念 | 含义 |
 |------|------|
-| **泰国 TH** | **流程参考**：状态机骨架以 TH 实现为蓝本 |
-| **各国协议** | 选中国家后绑定该国 `ProtocolContext`（locale / 区号 / 证件 / 地址样式等） |
-| **生成资料** | 姓名 / 城市 / 街道 / 邮编 / 手机区号 **必须对应该国**，不会串成泰国资料 |
-| **巴西 BR** | 深度参考之一（CPF、部分风控路径）；**不是**唯一可跑国家 |
+| **协议国家** | 选中 ISO 国家后绑定该国 `ProtocolContext`（locale / 区号 / 证件 / 地址样式等） |
+| **生成资料** | 姓名 / 城市 / 街道 / 邮编 / 手机区号 **必须对应该国**，不会串用其它国家资料 |
+| **证件** | 按国家规则：例如 `BR` 会生成并提交 **CPF**；多数国家不强制证件字段 |
 
 任务启动日志示例：
 
@@ -35,7 +34,7 @@ Protocol context: JP (日本) lang=ja locale=ja_JP phone_cc=+81 runtime=protocol
 `TH JP US GB BR MX ID MY SG PH VN KR HK TW CN AU NZ CA DE FR ES IT NL SE PL PT IE CH AT BE DK NO FI IN AE SA IL TR RU ZA AR CL CO PE`
 
 - 各国：语言 / locale、国际区号、分析时区、地址样式
-- **仅巴西 BR** 生成并提交 **CPF**；其余不强制证件
+- 证件字段按国别规则（如 `BR` 提交 CPF）；其余多数不强制
 - 全部 44 国均有本地 **`ADDRESS_POOLS`** curated 地址（表单安全 ASCII）
 
 ---
@@ -145,19 +144,17 @@ copy .env.example .env
 | 指纹 / DataDome / MTR | **表单可选**：`random`/`protocol`/`python_generated`（纯协议）或 `headless` / `roxy` |
 | 表单 HTML 初始选项 | 三项常默认勾 **Headless**（需本机 Playwright）；可手动改纯协议 |
 | `GET /api/runtime` 的 `default` | 文档化推荐纯协议：`random` + `protocol` + `python_generated` |
-| `create_job` | **尊重客户端**传入的三项 + `buyer_identity_mode`（**不再**强制锁死巴西纯协议） |
+| `create_job` | **尊重客户端**传入的三项 + `buyer_identity_mode` |
 | 服务器 `deploy/install.sh` | `.env` 写入纯协议默认；用户仍可在页面改选 Headless/Roxy |
 | Buyer 模式 | `legacy` / `elevate_bind` |
 | 业务层 | 仅 A 层（无 B/C 开关） |
 | 地址 | OSM 在线优先 → 本地池 |
 
-> 旧文档曾写「Web 锁定巴西三项、无 Headless 下拉」——**已过时**。当前 UI 有完整下拉 + 升权模式。
-
 ### 纯协议 vs Headless
 
 | 模式 | 适用 |
 |------|------|
-| 纯协议 `random` + `protocol` + `python_generated` | 服务器部署、无 Chromium、冒烟、对齐巴西协议路径 |
+| 纯协议 `random` + `protocol` + `python_generated` | 服务器部署、无 Chromium、冒烟与多租户默认 |
 | Headless | 本机已装 Playwright，希望 Phase0 DataDome 等用真实浏览器辅助 |
 | Roxy | 本机 Roxy Local API + API Key |
 
@@ -179,13 +176,13 @@ CLI 覆盖：`--runtime protocol|headless|auto|roxy` 及细粒度 `--fingerprint
 | POST | `/api/proxy/test` | 测试代理 |
 | POST | `/api/roxy/test` | 测试 Roxy（可选） |
 
-创建任务示例（升权 + 纯协议 + 巴西）：
+创建任务示例（升权 + 纯协议）：
 
 ```json
 {
   "ba_token": "BA-xxxxxxxxxxxxxxxxx",
-  "phone": "+5511987654321",
-  "country": "BR",
+  "phone": "+819012345678",
+  "country": "JP",
   "proxy_enabled": true,
   "proxy": "host:port:username:password",
   "buyer_identity_mode": "elevate_bind",
@@ -261,9 +258,9 @@ $env:SMSBOWER_API_KEY = "your_key"
 ## 常见问题
 
 **每个国家是自己的协议吗？**  
-是。流程架子参考 TH；locale / 区号 / 资料 / 证件按所选国绑定。
+是。locale / 区号 / 资料 / 证件按所选国绑定，互不串用。
 
-**资料会串成泰国吗？**  
+**资料会串国家吗？**  
 不会。`address.country` 与手机区号强制等于所选国。
 
 **在线地址超时？**  

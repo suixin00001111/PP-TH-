@@ -1,4 +1,4 @@
-﻿"""Browser + protocol runtime bridge (openai-paypal style, multi-country aware).
+﻿"""Browser + protocol runtime bridge (multi-country aware).
 
 Runtime modes exposed to UI/CLI:
   - protocol: pure HTTP (existing multi-country flow)
@@ -177,7 +177,7 @@ def _import_cookies_to_session(session, cookies: list[dict[str, Any]] | None) ->
 
 
 def run_phase0_browser_assist(flow, page_url: str, *, force: bool = False, html: str = "", status_code: int = 0) -> dict[str, Any]:
-    """Deep Phase0 DataDome assist aligned with openai-paypal BR package.
+    """Phase0 DataDome browser assist.
 
     - protocol mode: skip
     - headless: solve_datadome_with_local_headless, import cookies + datadome

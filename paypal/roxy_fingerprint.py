@@ -193,7 +193,7 @@ def _roxy_language_candidates(value: object) -> list[str]:
 def _roxy_proxy_info(proxy_url: str) -> dict[str, Any]:
     """Build Roxy Local API proxyInfo.
 
-    Empty / unparsable proxy falls back to noproxy ("本机网络") like the master.
+    Empty / unparsable proxy falls back to noproxy ("本机网络").
     """
     value = (proxy_url or "").strip()
     if not value:

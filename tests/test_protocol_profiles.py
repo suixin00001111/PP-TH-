@@ -13,7 +13,7 @@ class ProtocolProfileTests(unittest.TestCase):
             self.assertTrue(prof.lang)
             self.assertTrue(prof.locale_tag)
             self.assertTrue(prof.phone_cc.startswith("+"))
-        # Gold multi-country markets inherit Brazil-depth A-layer template
+        # Multi-country markets share the same A-layer runtime template
         self.assertEqual(get_region("TH").protocol_base, "BR")
         self.assertEqual(get_region("BR").protocol_base, "BR")
 

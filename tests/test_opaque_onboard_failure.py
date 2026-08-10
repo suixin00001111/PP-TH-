@@ -15,8 +15,8 @@ class OpaqueOnboardFailureTests(unittest.TestCase):
         result = PayPalFlow._identity_document_payload(flow)
         self.assertIsNone(result)
 
-    def test_dob_payload_matches_master_behavior(self):
-        # Master: valid dob -> full dict; malformed/missing dob -> empty dict (no default).
+    def test_dob_payload_shape(self):
+        # Valid dob -> full dict; malformed/missing dob -> empty dict (no default).
         flow = Mock()
         flow.user = Mock(dob="15/06/1990")
         payload = PayPalFlow._dob_payload(flow)

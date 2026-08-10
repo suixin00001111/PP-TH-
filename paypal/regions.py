@@ -1,8 +1,7 @@
 """Per-country protocol profiles for multi-country BA flow.
 
-Brazil (openai-paypal) is the deep risk/session reference implementation.
-Each market reuses that runtime depth but binds its own protocol knobs:
-locale, language, dial code, analytics offset, identity rules, address shape.
+Each market binds its own knobs: locale, language, dial code, analytics
+offset, identity rules, address shape.
 """
 from __future__ import annotations
 
@@ -24,7 +23,7 @@ class RegionProfile:
     phone_placeholder: str
     sample_local: str
     phone_hint: str = ""
-    protocol_base: str = "BR"  # deep risk/session base (Brazil-depth)
+    protocol_base: str = "BR"  # shared runtime template id (legacy field)
     require_identity: bool = False
     identity_type: str | None = None
     send_identity_document: bool = False

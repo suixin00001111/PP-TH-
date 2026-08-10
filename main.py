@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PayPal Billing Agreement automation — multi-country, Brazil-depth protocol."""
+"""PayPal Billing Agreement automation — multi-country pure HTTP protocol."""
 import argparse
 import json
 import sys
@@ -18,7 +18,7 @@ from paypal.runtime_bridge import build_otp_provider
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PayPal BA multi-country (母版 headless 默认可跑通 + 多国协议)"
+        description="PayPal BA multi-country (protocol / headless / elevate_bind)"
     )
     parser.add_argument("--ba-token", required=True)
     parser.add_argument("--phone", required=True)

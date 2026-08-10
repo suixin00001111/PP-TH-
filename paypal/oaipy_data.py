@@ -1,8 +1,7 @@
 """Country-specific profile generation via open-source Faker locales.
 
-Protocol flow: Thailand is the *reference state machine* only.
-Profile identity (name / address / phone / optional CPF) always follows the
-selected country protocol — never Thai identity data for non-TH runs.
+Profile identity (name / address / phone / optional national ID) always follows
+the selected country protocol — never mix identity data across countries.
 
 Data source: Faker (https://github.com/joke2k/faker, MIT License)
 Each country maps to a Faker locale provider so names/cities/streets come from
@@ -104,9 +103,9 @@ CITY_OVERRIDE: dict[str, list[tuple[str, str, str]]] = {
     "ZA": [("GP", "Johannesburg", "2196"), ("WC", "Cape Town", "8001")],
 }
 
-# Thailand: PayPal checkout expects coherent province/city/postal pairs.
-# Faker th_TH often yields Thai-script streets and a bogus state "ST", which
-# can collapse SignUpNewMember into opaque onboardAccount FAILURE.
+# TH curated locations: PayPal checkout expects coherent province/city/postal.
+# Faker th_TH often yields non-Latin streets and a bogus state "ST", which can
+# collapse SignUpNewMember into opaque onboardAccount FAILURE.
 _TH_LOCATIONS: list[dict[str, str]] = [
     {"state": "Bangkok", "city": "Bangkok", "district": "Pathum Wan", "postal": "10330"},
     {"state": "Bangkok", "city": "Bangkok", "district": "Watthana", "postal": "10110"},
