@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@400;500;600;700&family=Orbitron:wght@600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/app.css?v=8" />
+  <link rel="stylesheet" href="/static/app.css?v=9" />
 </head>
 <body>
   <div class="bg-grid" aria-hidden="true"></div>
@@ -199,11 +199,11 @@
           </div>
           <div id="proxyPanel" class="proxy-panel">
             <label id="proxyRawWrap">
-              <span>代理信息（支持多条）</span>
-              <textarea id="proxyRaw" name="proxyRaw" rows="4" spellcheck="false" autocomplete="off"
+              <span>代理池</span>
+              <textarea id="proxyRaw" name="proxyRaw" rows="5" spellcheck="false" autocomplete="off"
                 placeholder="每行一条，任务开始时随机选择&#10;user:pass@host:port&#10;host:port:user:pass&#10;socks5h://user:pass@host:port"></textarea>
             </label>
-            <p class="field-hint">每行一条；任务开始时随机选用。节点详情不在任务详情、日志或结果中展示。测试与任务都只认你填写的节点。</p>
+            <p class="field-hint">每行一条，任务开始时随机选择；不在任务详情、日志或结果中展示。</p>
             <div class="proxy-actions">
               <button id="testProxyBtn" class="ghost" type="button">测试代理</button>
               <span id="proxyTestResult" class="proxy-test-result" aria-live="polite"></span>
@@ -298,5 +298,5 @@
   </div>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <script src="/static/app.js?v=8"></script>
+  <script src="/static/app.js?v=9"></script>
 </body>

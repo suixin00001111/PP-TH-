@@ -775,31 +775,29 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
     except Exception as exc:
         raise ValueError(classify_proxy_transport_error(str(exc))) from exc
 
-    if working is None or note == "direct":
-        mode = "direct"
-        label = "直连"
-    else:
-        mode = "custom" if filled_lines else "system"
-        label = "代理开" if filled_lines else "代理开·系统"
+    # Connectivity test: ok / fail only for the form. Never host/user/URL/which line.
+    # Exit IP is allowed here so the operator can confirm the node works before start.
     pool_n = len(filled_lines)
-    # Connectivity test may show exit IP (needed to verify the node works).
-    # Never return host/user/URL/scheme detail of the selected line.
-    msg_bits = []
+    if working is None or note == "direct":
+        label = "直连"
+        msg = "直连可用"
+    else:
+        label = "可用"
+        msg = "代理可用"
     if exit_ip:
-        msg_bits.append(f"出口 IP {exit_ip}")
+        msg = f"{msg} · 出口 {exit_ip}"
+    if latency_ms:
+        msg = f"{msg} · {latency_ms}ms"
     if pool_n > 1:
-        msg_bits.append(f"池 {pool_n} 条·已测通")
-    elif pool_n == 1:
-        msg_bits.append("节点可用")
+        msg = f"{msg} · 池 {pool_n} 条"
     return {
         "ok": True,
-        "mode": mode,
+        "mode": "direct" if (working is None or note == "direct") else "custom",
         "proxy_label": label,
-        "proxy_pool_size": pool_n,
         "status": status,
-        "exit_ip": exit_ip,
+        "exit_ip": exit_ip or "",
         "latency_ms": latency_ms or int((_time.time() - started) * 1000),
-        "message": "；".join(msg_bits) if msg_bits else "连通",
+        "message": msg,
     }
 
 
@@ -995,14 +993,9 @@ class WebJob:
                 "phone_auto": bool(getattr(self, "phone_auto", False)),
                 "debug": self.debug and ALLOW_DEBUG_LOGS,
                 "max_card_attempts": self.max_card_attempts,
-                "proxy_enabled": self.proxy_enabled,
-                "proxy_mode": getattr(self, "proxy_mode", "custom"),
-                # Coarse status only — never host/user/URL (see ProxyConfig.label).
-                "proxy_label": (
-                    "代理开"
-                    if self.proxy_enabled
-                    else (self.proxy_label if self.proxy_label in {"直连", "代理关闭"} else "代理关闭")
-                ),
+                "proxy_enabled": bool(self.proxy_enabled),
+                # Coarse on/off only — never host/user/URL/which line from the pool.
+                "proxy_label": "代理开" if self.proxy_enabled else "代理关",
                 "generated": sanitize_payload(self.generated),
                 "awaiting_otp": self.status == "awaiting_otp",
                 "awaiting_prompt": redact_text(self.awaiting_prompt),
@@ -1664,32 +1657,30 @@ def run_job(job: WebJob) -> None:
                 if working is None or note == "direct":
                     if require_filled:
                         raise ValueError(
-                            "已启用/填写代理，但全部节点 HTTPS 出网失败；"
-                            "不会回退本机系统代理或直连。请换节点或一次填多条代理。"
+                            "已启用/填写代理，但出网失败；"
+                            "不会回退本机系统代理或直连。请换节点后重试。"
                         )
                     proxy_config = ProxyConfig(
                         enabled=False,
                         entry=None,
                         resolved_from=note or "direct",
                     )
-                    # Coarse log only — no host/user/URL/exit detail in job stream.
-                    logger.info("Proxy resolved for job: direct")
+                    # Coarse log only — no host/user/URL/exit/pool detail in job stream.
+                    logger.info("Proxy: off")
                 else:
                     proxy_config = ProxyConfig(
                         enabled=True,
                         entry=working,
-                        resolved_from=note,
+                        resolved_from="filled",
                     )
-                    logger.info(
-                        "Proxy resolved for job: on pool={}",
-                        len(filled_lines) or 1,
-                    )
+                    logger.info("Proxy: on")
                 job._proxy_config = proxy_config
             except Exception:
                 restore_process_proxy_env(saved_proxy_env)
                 raise
             job.proxy_enabled = proxy_config.enabled
-            job.proxy_label = proxy_config.label
+            # Public label only — never which line / host / pool size.
+            job.proxy_label = "代理开" if proxy_config.enabled else "代理关"
             job.set_status("running", "生成用户、卡片和地址")
             profile = generate_oaipy_profile(phone=job.phone, country=job.country)
             user = profile["user"]
@@ -1706,7 +1697,6 @@ def run_job(job: WebJob) -> None:
             )
 
             logger.info("Web job started: {}", job.id)
-            logger.info("Proxy: {}", "on" if proxy_config.enabled else "off")
             # Proxy already resolved above (explicit filled endpoint only).
             logger.info("Runtime mode: {}", getattr(job, "runtime_mode", "protocol"))
             logger.info("SMSBower: {}", "on" if getattr(job, "smsbower_enabled", False) else "off")

@@ -429,13 +429,8 @@ async function testProxy() {
     if (data.ok === false) {
       setProxyTestResult(`失败：${data.message || data.error || "不可用"}`, "bad");
     } else {
-      // Show connectivity only — never host/user/URL of the selected line.
-      const ip = data.exit_ip ? ` · IP ${data.exit_ip}` : "";
-      const ms = data.latency_ms != null ? ` · ${data.latency_ms}ms` : "";
-      const pool = (data.proxy_pool_size || poolSize) > 1
-        ? ` · 池 ${data.proxy_pool_size || poolSize} 条`
-        : "";
-      setProxyTestResult(`可用${ip}${ms}${pool}`, "ok");
+      // Connectivity only (form test). Job detail/logs/results never show endpoints.
+      setProxyTestResult(data.message || "可用", "ok");
     }
   } catch (err) {
     setProxyTestResult(`失败：${err.message}`, "bad");
@@ -820,9 +815,7 @@ function renderCurrent(job) {
     ? (sb.status ? `SMS:${sb.status}` : "SMS:on")
     : "SMS:off";
   const runtimeMeta = ` · FP:${job.fingerprint_source || "-"} · DD:${job.datadome_mode || "-"} · MTR:${job.mtr_runtime || "-"} · Buyer:${buyerLabel} · ${sbLabel}`;
-  const proxyMeta = job.proxy_enabled
-    ? "代理开"
-    : (job.proxy_label === "直连" ? "直连" : "代理关");
+  const proxyMeta = job.proxy_enabled ? "代理开" : "代理关";
   $("#currentMeta").textContent = `#${job.id} · 创建于 ${fmtTime(job.created_at)} · ${proxyMeta}${runtimeMeta}`;
   $("#jobStatus").textContent = job.status;
   const stageText = job.stage || "";

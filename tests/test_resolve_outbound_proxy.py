@@ -82,13 +82,14 @@ class ResolveOutboundProxyTests(unittest.TestCase):
         self.assertEqual(len(entries), 2)
         self.assertTrue(any("parse#" in n for n in notes))
 
-    def test_random_selection_shuffles_before_probe(self):
+    def test_random_selection_picks_one_line_only(self):
+        """Job pool contract: random pick exactly one line; no multi-line failover."""
         first = ProxyEntry(host="a.example", port=1, scheme="http", username="u", password="p")
         second = ProxyEntry(host="b.example", port=2, scheme="http", username="u", password="p")
-        order: list[str] = []
+        probed: list[str] = []
 
         def fake_resolve(entry, timeout=12.0):
-            order.append(entry.host)
+            probed.append(entry.host)
             return entry, "9.9.9.9", 11
 
         with patch("paypal.proxy.list_system_proxy_entries", return_value=[]), patch(
@@ -100,8 +101,8 @@ class ResolveOutboundProxyTests(unittest.TestCase):
             "paypal.proxy.split_proxy_inputs",
             return_value=["http://u:p@a.example:1", "http://u:p@b.example:2"],
         ), patch(
-            "paypal.proxy.random.shuffle",
-            side_effect=lambda seq: seq.reverse(),
+            "paypal.proxy.random.choice",
+            return_value=second,
         ):
             entry, ip, ms, note = resolve_outbound_proxy(
                 "pool",
@@ -109,10 +110,9 @@ class ResolveOutboundProxyTests(unittest.TestCase):
                 allow_direct_fallback=False,
                 filled_selection="random",
             )
-        # shuffle reversed [a,b] -> [b,a]; first hit is b
         self.assertEqual(entry.host, "b.example")
-        self.assertEqual(order[0], "b.example")
-        self.assertTrue(note.startswith("filled"))
+        self.assertEqual(probed, ["b.example"])
+        self.assertEqual(note, "filled")
 
     def test_sequential_keeps_input_order(self):
         first = ProxyEntry(host="a.example", port=1, scheme="http", username="u", password="p")

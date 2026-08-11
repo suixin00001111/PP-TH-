@@ -653,11 +653,12 @@ def resolve_outbound_proxy(
     """Resolve outbound proxy (filled proxies win when provided).
 
     Strategy:
-      - User-filled residential/custom proxies are tried FIRST (multi-line pool).
+      - User-filled residential/custom proxies are tried FIRST (multi-line pool,
+        one proxy per line).
         ``filled_selection``:
-          * ``sequential`` — top-to-bottom (connectivity test / diagnostics)
-          * ``random`` — shuffle pool at call time (job start: pick randomly,
-            then failover through remaining in that random order)
+          * ``sequential`` — top-to-bottom (connectivity test / diagnostics only)
+          * ``random`` — **job start**: pick exactly one line at random from the
+            pool (no ordered failover, no index leaked to logs/UI)
       - Local/system proxies are tried next only when allowed and nothing was
         filled (or filled failed *and* system fallback is on).
       - If nothing was filled and proxies fail, fall back to **direct** when the
@@ -670,7 +671,7 @@ def resolve_outbound_proxy(
     Returns (entry|None, exit_ip, latency_ms, note).
     entry is None means direct (no application-level proxy).
     ``note`` is intentionally coarse (``filled`` / ``direct`` / ``system``) so
-    host/user are not leaked into job logs or UI.
+    host/user/which-line are not leaked into job logs or UI.
     """
     filled_lines = split_proxy_inputs(raw=filled_raw, pool=filled_pool)
     notes: list[str] = []
@@ -681,9 +682,9 @@ def resolve_outbound_proxy(
         notes.append(f"parse-failed:{len(parse_notes)}")
     has_filled = bool(filled_lines)
     selection = (filled_selection or "sequential").strip().lower() or "sequential"
-    if selection == "random" and len(filled_entries) > 1:
-        filled_entries = list(filled_entries)
-        random.shuffle(filled_entries)
+    # Job path: one random line only (pool contract: 每行一条，任务开始时随机选择).
+    if selection == "random" and filled_entries:
+        filled_entries = [random.choice(filled_entries)]
 
     def _try_entry(entry: ProxyEntry, tag: str) -> tuple[ProxyEntry, str, int, str] | None:
         try:
@@ -713,9 +714,8 @@ def resolve_outbound_proxy(
         hit = _try_entry(filled_entry, "filled")
         if hit:
             working, exit_ip, latency_ms, used_tag = hit
-            if working.scheme != filled_entry.scheme:
-                used_tag = f"filled-auto-{working.scheme}"
-            return working, exit_ip, latency_ms, used_tag
+            # Always coarse "filled" — never scheme/index (job UI streams note).
+            return working, exit_ip, latency_ms, "filled"
 
     # 2) System / local proxy fallback (only when allowed).
     if allow_system_fallback:
@@ -743,9 +743,9 @@ def resolve_outbound_proxy(
     ]
     if has_filled:
         parts.append(
-            f"已填写 {len(filled_lines)} 条代理，均未能完成 HTTPS 出网。"
+            "填写的代理未能完成 HTTPS 出网。"
             "常见原因：节点拒绝当前公网 IP、节点失效、账号密码错误、或协议需 socks5h。"
-            "可换节点、加白名单，或再填多条后重试。"
+            "可换节点、加白名单后重试。"
         )
     if system_entries and allow_system_fallback:
         parts.append(
