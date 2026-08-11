@@ -599,6 +599,241 @@ def probe_proxy_entry(
     raise ValueError(" | ".join(errors[-3:]) if errors else "probe failed")
 
 
+def lookup_ip_country(
+    ip: str,
+    *,
+    timeout: float = 8.0,
+    via_proxy_url: str | None = None,
+) -> str:
+    """Resolve public IP → ISO2 country code (e.g. ``JP``). Empty on failure.
+
+    Uses free no-key endpoints. Prefer querying **through** the same proxy so
+    the geo answer matches the exit path used by the BA flow.
+    """
+    ip = (ip or "").strip()
+    if not ip:
+        return ""
+
+    def _http_get(url: str) -> tuple[int, str]:
+        # Prefer curl_cffi (same stack as BA); fall back to stdlib.
+        try:
+            from curl_cffi import requests as curl_requests
+
+            with curl_requests.Session(timeout=timeout, impersonate="chrome131") as client:
+                if hasattr(client, "trust_env"):
+                    client.trust_env = False
+                if via_proxy_url:
+                    client.proxies = {"http": via_proxy_url, "https": via_proxy_url}
+                resp = client.get(url)
+                status = int(getattr(resp, "status_code", 0) or 0)
+                body = (getattr(resp, "text", None) or "")[:800]
+                return status, body
+        except Exception:
+            pass
+        try:
+            import urllib.request
+
+            req = urllib.request.Request(url, headers={"User-Agent": "pp-th-proxy-geo/1"})
+            # stdlib cannot easily set SOCKS; only use direct when no via_proxy
+            if via_proxy_url:
+                raise RuntimeError("stdlib geo skip with proxy")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                body = resp.read(800).decode("utf-8", errors="replace")
+                return int(getattr(resp, "status", 200) or 200), body
+        except Exception:
+            return 0, ""
+
+    def _parse_code(payload: dict) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        for key in ("countryCode", "country_code", "country", "country_code_iso"):
+            raw = payload.get(key)
+            if raw is None:
+                continue
+            code = str(raw).strip().upper()
+            if len(code) == 2 and code.isalpha():
+                if code == "UK":
+                    return "GB"
+                return code
+        return ""
+
+    # Endpoints that take the IP in the path/query (work even without proxy).
+    urls = [
+        f"http://ip-api.com/json/{ip}?fields=status,countryCode",
+        f"https://ipwho.is/{ip}",
+        f"https://ipapi.co/{ip}/json/",
+    ]
+    # When going via the working proxy, also hit "me" endpoints (exit IP geo).
+    if via_proxy_url:
+        urls = [
+            "http://ip-api.com/json/?fields=status,countryCode",
+            "https://ipwho.is/",
+            "https://ipapi.co/json/",
+        ] + urls
+
+    import json as _json
+
+    for url in urls:
+        try:
+            status, body = _http_get(url)
+            if status < 200 or status >= 400 or not body:
+                continue
+            try:
+                data = _json.loads(body)
+            except Exception:
+                continue
+            if isinstance(data, dict) and str(data.get("status") or "").lower() == "fail":
+                continue
+            code = _parse_code(data)
+            if code:
+                return code
+        except Exception:
+            continue
+    return ""
+
+
+def filter_filled_proxy_pool(
+    raw: str | None,
+    *,
+    expected_country: str,
+    timeout: float = 12.0,
+) -> dict:
+    """Probe each filled proxy line; keep only reachable lines whose exit country matches.
+
+    Public result intentionally omits host/user/URL. ``kept_proxies`` is the
+    surviving original lines (for rewriting the form textarea).
+    Dead lines and country-mismatched lines are dropped.
+    """
+    expected = (expected_country or "").strip().upper()
+    if expected == "UK":
+        expected = "GB"
+    lines = split_proxy_inputs(raw=raw)
+    if not lines:
+        return {
+            "ok": False,
+            "kept_proxies": [],
+            "kept_count": 0,
+            "removed_count": 0,
+            "total": 0,
+            "unreachable_count": 0,
+            "country_mismatch_count": 0,
+            "parse_failed_count": 0,
+            "expected_country": expected,
+            "exit_ip": "",
+            "exit_country": "",
+            "latency_ms": 0,
+            "message": "请先填写代理",
+        }
+
+    kept: list[str] = []
+    unreachable = 0
+    mismatch = 0
+    parse_failed = 0
+    sample_ip = ""
+    sample_cc = ""
+    sample_ms = 0
+
+    for line in lines:
+        try:
+            entry = ProxyEntry.parse(line)
+        except Exception:
+            parse_failed += 1
+            continue
+        try:
+            host = (entry.host or "").lower()
+            is_local = host in {"127.0.0.1", "localhost", "::1"} or host.startswith("127.")
+            if not is_local and entry.username:
+                working, exit_ip, latency_ms = resolve_working_proxy_entry(
+                    entry, timeout=timeout
+                )
+            else:
+                working = entry
+                exit_ip, latency_ms = probe_proxy_entry(entry, timeout=timeout)
+        except Exception:
+            unreachable += 1
+            continue
+
+        exit_cc = ""
+        try:
+            exit_cc = lookup_ip_country(
+                exit_ip,
+                timeout=min(timeout, 8.0),
+                via_proxy_url=working.url if working else None,
+            )
+        except Exception:
+            exit_cc = ""
+
+        if expected and exit_cc and exit_cc != expected:
+            mismatch += 1
+            continue
+        if expected and not exit_cc:
+            # Cannot confirm country → drop (strict filter per operator request)
+            mismatch += 1
+            continue
+
+        kept.append(line)
+        if not sample_ip and exit_ip:
+            sample_ip = exit_ip
+            sample_cc = exit_cc or expected
+            sample_ms = int(latency_ms or 0)
+
+    removed = len(lines) - len(kept)
+    ok = bool(kept)
+    parts: list[str] = []
+    if ok:
+        parts.append(f"可用 {len(kept)}/{len(lines)}")
+        if sample_ip:
+            parts.append(f"出口 {sample_ip}")
+        if sample_cc:
+            parts.append(f"国家 {sample_cc}")
+        if sample_ms:
+            parts.append(f"{sample_ms}ms")
+        if removed:
+            drop_bits = []
+            if mismatch:
+                drop_bits.append(f"国家不符 {mismatch}")
+            if unreachable:
+                drop_bits.append(f"不通 {unreachable}")
+            if parse_failed:
+                drop_bits.append(f"格式错误 {parse_failed}")
+            if drop_bits:
+                parts.append("已删除 " + "、".join(drop_bits))
+            else:
+                parts.append(f"已删除 {removed}")
+        if expected:
+            parts.append(f"筛选 {expected}")
+    else:
+        bits = []
+        if mismatch:
+            bits.append(f"国家不符 {mismatch} 条（期望 {expected or '?'}）")
+        if unreachable:
+            bits.append(f"不通 {unreachable} 条")
+        if parse_failed:
+            bits.append(f"格式错误 {parse_failed} 条")
+        detail = "；".join(bits) if bits else "全部不可用"
+        parts.append(
+            f"筛选后无可用代理（共 {len(lines)} 条）。{detail}。"
+            "已自动清空不匹配/不可用节点；请换与所选国家一致的住宅出口后重试。"
+        )
+
+    return {
+        "ok": ok,
+        "kept_proxies": kept,
+        "kept_count": len(kept),
+        "removed_count": removed,
+        "total": len(lines),
+        "unreachable_count": unreachable,
+        "country_mismatch_count": mismatch,
+        "parse_failed_count": parse_failed,
+        "expected_country": expected,
+        "exit_ip": sample_ip,
+        "exit_country": sample_cc,
+        "latency_ms": sample_ms,
+        "message": " · ".join(parts) if ok else parts[0],
+        "proxy": "\n".join(kept),
+    }
+
+
 def probe_direct_exit(*, timeout: float = 12.0) -> tuple[str, int]:
     """Probe direct (no app-level proxy) HTTPS exit IP."""
     import time

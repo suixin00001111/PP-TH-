@@ -110,12 +110,16 @@ Chromium **不支持带用户名密码的 SOCKS5**。
 
 ## 7. Web「测试代理」
 
-`POST /api/proxy/test` 与任务使用同一套 `resolve_outbound_proxy`。
+`POST /api/proxy/test` 与任务使用同一套填写池解析；**额外按所选协议国家筛选**。
 
-- 填写了节点 → **只测填写池**；全部失败则报错（不会用本机 7897 冒充成功）。
-- 可返回出口 IP / 延迟 / 池大小，**不返回**具体 host、账号或 URL。
+- 填写了节点 → **逐行探测填写池**；全部失败则报错（不会用本机 7897 冒充成功）。
+- 请求可带 `country`（与表单所选协议国家一致）。每条代理取出口 IP 后查国家：
+  - 出口国家 ≠ 所选国家 → **自动删除该行**
+  - 不通 / 解析失败 / 查不到国家 → **删除**
+  - 匹配的行写回表单文本框（`kept_proxies` / `proxy`）
+- 可返回出口 IP / 出口国家 / 延迟 / 保留条数，**消息中不返回**具体 host、账号或 URL。
 
-成功返回字段包括：`exit_ip`、`proxy_pool_size`、`latency_ms`、`proxy_label`（仅「代理开」等）。
+成功返回字段包括：`exit_ip`、`exit_country`、`expected_country`、`kept_proxies`、`kept_count`、`removed_count`、`proxy_pool_size`、`latency_ms`、`proxy_label`、`message`。
 
 ## 8. 推荐用法
 
@@ -129,8 +133,8 @@ Chromium **不支持带用户名密码的 SOCKS5**。
 
 1. 代理商后台把**当前公网 IP** 加入白名单
 2. 填写 `socks5h://user-region-XX:pass@host:port`（或 `http://`，由程序自动尝试 socks5h）
-3. 先点「测试代理」，确认出口国家与协议国家尽量一致
-4. 再「开始执行」
+3. 先点「测试代理」：程序会**自动删除**出口国家 ≠ 所选协议国家的节点，并写回文本框
+4. 确认筛选后仍有可用行，再「开始执行」
 
 ### C. 系统代理（仅开系统代理、未开 TUN）
 
@@ -140,7 +144,7 @@ Chromium **不支持带用户名密码的 SOCKS5**。
 
 | 文件 | 作用 |
 |------|------|
-| `paypal/proxy.py` | 解析、探测、系统代理、forbidden IP 诊断、出网解析 |
+| `paypal/proxy.py` | 解析、探测、系统代理、forbidden IP 诊断、出网解析、出口国家筛选 |
 | `paypal/proxy_bridge.py` | SOCKS 认证转本地 HTTP 桥（Playwright） |
 | `paypal/session.py` | curl_cffi/httpx 出网注入 |
 | `paypal/local_headless.py` | Headless 与 Playwright 代理配置 |

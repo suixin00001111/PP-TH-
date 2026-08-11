@@ -339,6 +339,8 @@ function syncSmsbowerUi() {
 
 
 function splitProxyLines(raw) {
+  // Split ONLY on real line breaks / ; / | — never collapse multi-line paste.
+  // Commas stay inside a line (passwords / provider strings may contain ,).
   const text = String(raw || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const out = [];
   const seen = new Set();
@@ -379,10 +381,12 @@ function normalizeProxyLine(raw) {
   return "http://" + value;
 }
 
-/** Normalize multi-line proxy pool; keep one proxy per line for the API. */
+/**
+ * Normalize multi-line proxy pool for API payloads only.
+ * Does NOT rewrite the textarea — editing must keep every line the user typed.
+ */
 function normalizeProxyInput(raw) {
   const lines = splitProxyLines(raw).map(normalizeProxyLine).filter(Boolean);
-  // de-dupe again after scheme rewrite
   const out = [];
   const seen = new Set();
   for (const line of lines) {
@@ -396,6 +400,7 @@ function normalizeProxyInput(raw) {
 
 function getProxyForRequest() {
   if (!$("#proxyEnabled")?.checked) return "";
+  // API gets normalized form; textarea stays as the user edited it.
   return normalizeProxyInput($("#proxyRaw")?.value || "");
 }
 
@@ -415,21 +420,38 @@ async function testProxy() {
     setProxyTestResult("请先填写代理", "bad");
     return;
   }
+  // Do NOT rewrite the textarea before test — only build the request body.
   const proxy = normalizeProxyInput(raw);
-  const poolSize = splitProxyLines(proxy).length;
-  if ($("#proxyRaw") && proxy) $("#proxyRaw").value = proxy;
-  saveProxyPrefs();
+  const poolSize = splitProxyLines(raw).length;
+  const country = getSelectedCountry();
   if (btn) btn.disabled = true;
-  setProxyTestResult(poolSize > 1 ? `测试中（${poolSize} 条）…` : "测试中…", "pending");
+  const pending =
+    poolSize > 1
+      ? `筛选中（${poolSize} 条 · ${country}）…`
+      : `测试中（筛选 ${country}）…`;
+  setProxyTestResult(pending, "pending");
   try {
     const data = await api("/api/proxy/test", {
       method: "POST",
-      body: JSON.stringify({ proxy, proxy_mode: "custom" }),
+      body: JSON.stringify({ proxy, proxy_mode: "custom", country }),
     });
+    // Only after an intentional test: drop country-mismatched / dead lines.
+    // Prefer kept_proxies from filter API; never clear the box on generic errors
+    // that omit filter fields.
+    const didFilter =
+      Object.prototype.hasOwnProperty.call(data, "kept_proxies") ||
+      Object.prototype.hasOwnProperty.call(data, "removed_count");
+    if (didFilter && $("#proxyRaw")) {
+      const keptList = Array.isArray(data.kept_proxies)
+        ? data.kept_proxies.map((x) => String(x || "").trim()).filter(Boolean)
+        : splitProxyLines(data.proxy || "");
+      // Write back surviving lines only (same text the backend kept).
+      $("#proxyRaw").value = keptList.join("\n");
+      saveProxyPrefs();
+    }
     if (data.ok === false) {
       setProxyTestResult(`失败：${data.message || data.error || "不可用"}`, "bad");
     } else {
-      // Connectivity only (form test). Job detail/logs/results never show endpoints.
       setProxyTestResult(data.message || "可用", "ok");
     }
   } catch (err) {
@@ -915,15 +937,15 @@ async function startJob(evt) {
     if ($("#proxyEnabled").checked && !$("#proxyRaw").value.trim()) {
       throw new Error("已启用代理，请填写代理信息");
     }
+    // Normalize only for the API body — never collapse the textarea to one line.
     const proxyNorm = getProxyForRequest();
-    if ($("#proxyEnabled").checked && proxyNorm && $("#proxyRaw")) {
-      $("#proxyRaw").value = proxyNorm;
-      saveProxyPrefs();
+    saveProxyPrefs();
     saveRuntimePrefs();
     try {
-      if ($('#smsbowerEnabled')) localStorage.setItem(SMSBOWER_ON_KEY, $('#smsbowerEnabled').checked ? '1' : '0');
+      if ($("#smsbowerEnabled")) {
+        localStorage.setItem(SMSBOWER_ON_KEY, $("#smsbowerEnabled").checked ? "1" : "0");
+      }
     } catch (e) {}
-    }
     const data = await api("/api/jobs", {
       method: "POST",
       body: JSON.stringify({
@@ -1003,11 +1025,19 @@ function bind() {
   }
   const proxyRaw = $("#proxyRaw");
   if (proxyRaw) {
-    proxyRaw.addEventListener("change", () => {
-      const v = proxyRaw.value.trim();
-      if (v) proxyRaw.value = normalizeProxyInput(v);
+    // Save as typed. Do NOT normalize/rewrite on change/paste/keydown —
+    // that was collapsing multi-line pools into one line before any test.
+    const persistProxy = () => {
       saveProxyPrefs();
       saveRuntimePrefs();
+    };
+    proxyRaw.addEventListener("change", persistProxy);
+    proxyRaw.addEventListener("blur", persistProxy);
+    proxyRaw.addEventListener("input", () => {
+      // debounce-ish save without mutating value
+      try {
+        localStorage.setItem(PROXY_LS_KEY, proxyRaw.value);
+      } catch (e) {}
     });
   }
   const countrySel = $("#countrySelect");

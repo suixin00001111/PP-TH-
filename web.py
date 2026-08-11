@@ -32,6 +32,7 @@ from paypal.oaipy_data import generate_address, generate_card, generate_oaipy_pr
 from paypal.proxy import (
     ProxyConfig,
     build_proxy_config,
+    filter_filled_proxy_pool,
     resolve_working_proxy_entry,
     resolve_outbound_proxy,
     get_system_proxy_entry,
@@ -678,15 +679,32 @@ def classify_proxy_transport_error(msg: str, body: str = "") -> str:
     return text if text else str(msg)
 
 
-def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[str, Any]:
+def test_proxy_connectivity(
+    proxy_raw: str,
+    proxy_mode: str = "custom",
+    country: str | None = None,
+) -> dict[str, Any]:
     """Probe outbound proxy. Prefer HTTP probe first to surface provider 403 bodies.
 
     proxy_mode=system: do not use application HTTP proxy (for OS TUN / system route).
     When the user filled one or more custom proxies, only those lines are tested —
     no silent fallback to Clash 7897 / direct (that mismatch caused “测试可用、任务失败”).
+
+    With a filled multi-line pool + ``country``, every line is probed; lines whose
+    exit IP country ≠ selected country (or that fail) are **dropped**. Surviving
+    lines are returned as ``kept_proxies`` / ``proxy`` for the form to rewrite.
     """
     mode = (proxy_mode or "custom").strip().lower() or "custom"
     raw = (proxy_raw or "").strip()
+    expected_country = ""
+    if country:
+        try:
+            expected_country = normalize_region(str(country))
+        except Exception:
+            expected_country = str(country or "").strip().upper()
+            if expected_country == "UK":
+                expected_country = "GB"
+
     if mode == "system":
         # Direct path — if user has TUN, OS routes this; we do not inject cliproxy URL.
         import time as _time
@@ -710,18 +728,85 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
             raise ValueError(
                 f"系统/TUN 出口不可用：{exc}。请确认已开启 TUN/系统代理，且本程序无需再填 cliproxy 账号。"
             ) from exc
+        exit_cc = ""
+        try:
+            from paypal.proxy import lookup_ip_country
+
+            exit_cc = lookup_ip_country(exit_ip, timeout=8.0)
+        except Exception:
+            exit_cc = ""
+        msg = "系统/TUN 可用"
+        if exit_ip:
+            msg = f"{msg} · 出口 {exit_ip}"
+        if exit_cc:
+            msg = f"{msg} · 国家 {exit_cc}"
+        if expected_country and exit_cc and exit_cc != expected_country:
+            return {
+                "ok": False,
+                "mode": "system",
+                "proxy_label": "系统/TUN",
+                "status": 200,
+                "exit_ip": exit_ip,
+                "exit_country": exit_cc,
+                "expected_country": expected_country,
+                "latency_ms": int((_time.time() - started) * 1000),
+                "message": (
+                    f"系统出口国家 {exit_cc} 与所选 {expected_country} 不一致。"
+                    "请换与协议国家一致的出口，或改用填写的住宅代理。"
+                ),
+                "kept_proxies": [],
+                "kept_count": 0,
+                "removed_count": 0,
+            }
         return {
             "ok": True,
             "mode": "system",
             "proxy_label": "系统/TUN",
             "status": 200,
             "exit_ip": exit_ip,
+            "exit_country": exit_cc,
+            "expected_country": expected_country,
             "latency_ms": int((_time.time() - started) * 1000),
+            "message": msg,
         }
 
     filled_lines = split_proxy_inputs(raw=raw)
-    # Filled custom proxy: stick to the pool only (same contract as run_job).
-    # Empty form: allow system then direct (VPS / desktop TUN probe).
+
+    # Filled pool + country: per-line probe + geo filter; auto-delete mismatches.
+    if filled_lines and expected_country:
+        saved_env = scrub_process_proxy_env()
+        try:
+            filtered = filter_filled_proxy_pool(
+                raw,
+                expected_country=expected_country,
+                timeout=15.0,
+            )
+        finally:
+            restore_process_proxy_env(saved_env)
+
+        result: dict[str, Any] = {
+            "ok": bool(filtered.get("ok")),
+            "mode": "custom",
+            "proxy_label": "可用" if filtered.get("ok") else "不可用",
+            "status": 200 if filtered.get("ok") else 0,
+            "exit_ip": filtered.get("exit_ip") or "",
+            "exit_country": filtered.get("exit_country") or "",
+            "expected_country": expected_country,
+            "latency_ms": int(filtered.get("latency_ms") or 0),
+            "message": filtered.get("message") or "",
+            "kept_proxies": list(filtered.get("kept_proxies") or []),
+            "kept_count": int(filtered.get("kept_count") or 0),
+            "removed_count": int(filtered.get("removed_count") or 0),
+            "total": int(filtered.get("total") or 0),
+            "unreachable_count": int(filtered.get("unreachable_count") or 0),
+            "country_mismatch_count": int(filtered.get("country_mismatch_count") or 0),
+            "parse_failed_count": int(filtered.get("parse_failed_count") or 0),
+            "proxy": filtered.get("proxy") or "",
+            "proxy_pool_size": int(filtered.get("kept_count") or 0),
+        }
+        return result
+
+    # Filled custom proxy without country filter, or empty form (system/direct).
     # Test uses sequential order so results are deterministic; jobs use random.
     allow_system = not bool(filled_lines)
     allow_direct = not bool(filled_lines)
@@ -775,6 +860,18 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
     except Exception as exc:
         raise ValueError(classify_proxy_transport_error(str(exc))) from exc
 
+    exit_cc = ""
+    try:
+        from paypal.proxy import lookup_ip_country
+
+        exit_cc = lookup_ip_country(
+            exit_ip or "",
+            timeout=8.0,
+            via_proxy_url=proxy_config.url,
+        )
+    except Exception:
+        exit_cc = ""
+
     # Connectivity test: ok / fail only for the form. Never host/user/URL/which line.
     # Exit IP is allowed here so the operator can confirm the node works before start.
     pool_n = len(filled_lines)
@@ -786,6 +883,8 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
         msg = "代理可用"
     if exit_ip:
         msg = f"{msg} · 出口 {exit_ip}"
+    if exit_cc:
+        msg = f"{msg} · 国家 {exit_cc}"
     if latency_ms:
         msg = f"{msg} · {latency_ms}ms"
     if pool_n > 1:
@@ -796,8 +895,15 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
         "proxy_label": label,
         "status": status,
         "exit_ip": exit_ip or "",
+        "exit_country": exit_cc,
+        "expected_country": expected_country,
         "latency_ms": latency_ms or int((_time.time() - started) * 1000),
         "message": msg,
+        "kept_proxies": filled_lines if filled_lines else [],
+        "kept_count": pool_n,
+        "removed_count": 0,
+        "proxy": "\n".join(filled_lines) if filled_lines else "",
+        "proxy_pool_size": pool_n,
     }
 
 
@@ -1967,6 +2073,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 result = test_proxy_connectivity(
                     str(data.get("proxy") or data.get("proxy_url") or data.get("proxy_raw") or ""),
                     proxy_mode=str(data.get("proxy_mode") or data.get("mode") or "custom"),
+                    country=str(data.get("country") or data.get("region") or ""),
                 )
                 return self.send_json(result)
             except Exception as exc:

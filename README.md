@@ -120,7 +120,7 @@ copy .env.example .env
 
 ### 代理（重要）
 
-- 优先在 **Web 填写** 并先点「测试代理」
+- 优先在 **Web 填写** 并先点「测试代理」（会按所选国家筛选，出口国家不符的行自动删除）
 - 支持 `http://` / `socks5://` / `socks5h://` / `host:port:user:pass`
 - 住宅节点常自动升为 **`socks5h`**
 - 系统代理（Clash `127.0.0.1:789x`）可在填写失败时回退
@@ -184,7 +184,7 @@ CLI 覆盖：`--runtime protocol|headless|auto|roxy` 及细粒度 `--fingerprint
 | POST | `/api/jobs` | 创建任务 |
 | GET | `/api/jobs/{id}` | 任务详情 / 日志 |
 | POST | `/api/jobs/{id}/otp` | 提交 OTP / 换号 |
-| POST | `/api/proxy/test` | 测试代理 |
+| POST | `/api/proxy/test` | 测试代理（按 `country` 筛出口；不匹配自动删除） |
 | POST | `/api/roxy/test` | 测试 Roxy（可选） |
 
 创建任务示例（升权 + 纯协议）：

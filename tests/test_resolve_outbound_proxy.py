@@ -177,6 +177,63 @@ class ResolveOutboundProxyTests(unittest.TestCase):
         off = ProxyConfig(enabled=False, entry=None, resolved_from="direct")
         self.assertEqual(off.label, "直连")
 
+    def test_filter_pool_keeps_matching_country_drops_mismatch(self):
+        from paypal.proxy import filter_filled_proxy_pool
+
+        good = ProxyEntry(host="good.example", port=1, username="u", password="p", scheme="http")
+        bad = ProxyEntry(host="bad.example", port=2, username="u", password="p", scheme="http")
+        dead = ProxyEntry(host="dead.example", port=3, username="u", password="p", scheme="http")
+
+        def fake_resolve(entry, timeout=12.0):
+            if entry.host == "good.example":
+                return entry, "1.1.1.1", 10
+            if entry.host == "bad.example":
+                return entry, "2.2.2.2", 11
+            raise ValueError("unreachable")
+
+        def fake_geo(ip, timeout=8.0, via_proxy_url=None):
+            return {"1.1.1.1": "JP", "2.2.2.2": "US"}.get(ip, "")
+
+        raw = "\n".join(
+            [
+                "http://u:p@good.example:1",
+                "http://u:p@bad.example:2",
+                "http://u:p@dead.example:3",
+            ]
+        )
+        with patch("paypal.proxy.resolve_working_proxy_entry", side_effect=fake_resolve), patch(
+            "paypal.proxy.lookup_ip_country", side_effect=fake_geo
+        ):
+            result = filter_filled_proxy_pool(raw, expected_country="JP", timeout=5.0)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["kept_count"], 1)
+        self.assertEqual(result["removed_count"], 2)
+        self.assertEqual(result["country_mismatch_count"], 1)
+        self.assertEqual(result["unreachable_count"], 1)
+        self.assertEqual(result["kept_proxies"], ["http://u:p@good.example:1"])
+        self.assertEqual(result["exit_country"], "JP")
+        self.assertIn("JP", result["message"])
+
+    def test_filter_pool_all_mismatch_clears(self):
+        from paypal.proxy import filter_filled_proxy_pool
+
+        entry = ProxyEntry(host="x.example", port=9, username="u", password="p", scheme="http")
+
+        with patch(
+            "paypal.proxy.resolve_working_proxy_entry",
+            return_value=(entry, "9.9.9.9", 5),
+        ), patch("paypal.proxy.lookup_ip_country", return_value="BR"):
+            result = filter_filled_proxy_pool(
+                "http://u:p@x.example:9",
+                expected_country="TH",
+                timeout=5.0,
+            )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kept_proxies"], [])
+        self.assertEqual(result["country_mismatch_count"], 1)
+        self.assertIn("无可用", result["message"])
+
 
 if __name__ == "__main__":
     unittest.main()
