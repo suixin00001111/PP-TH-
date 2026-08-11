@@ -958,7 +958,7 @@ async function startJob(evt) {
         country: getSelectedCountry(),
                 ...getRuntimePayload(),
         ...getRoxyConfigPayload(),
-        max_flow_attempts: Number($("#maxFlowAttempts")?.value || 1),
+        max_flow_attempts: Number($("#maxFlowAttempts")?.value || 3),
         max_authorize_attempts: Number($("#maxAuthorizeAttempts")?.value || 3),
         card_retry_delay_seconds: Number($("#cardRetryDelay")?.value || 6),
         card_retry_jitter_seconds: Number($("#cardRetryJitter")?.value || 2),

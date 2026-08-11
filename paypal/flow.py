@@ -146,7 +146,7 @@ class PayPalFlow:
         card: CardInfo,
         address: BillingAddress,
         max_card_attempts: int = 5,
-        max_flow_attempts: int = 1,
+        max_flow_attempts: int = 3,
         max_authorize_attempts: int = 3,
         card_retry_delay_seconds: float = 6.0,
         card_retry_jitter_seconds: float = 2.0,
@@ -6718,19 +6718,22 @@ class PayPalFlow:
                 continue
 
             if self._is_card_related_signup_error(errors):
+                # Success path needs a real onboardAccount (buyer bound). A bare
+                # accessToken inside ISSUER_DECLINE / CARD_GENERIC_ERROR is NOT a
+                # usable member session — continuing to authorize yields BUYER_NOT_SET.
+                # Historical success cases rotate cards until onboard succeeds.
                 if access_token:
-                    self.state.euat_token = access_token
-                    self._used_partial_signup_token = True
-                    self.state.signup_fallback_reason = "CARD_GENERIC_ERROR"
                     logger.warning(
-                        "Card/addCard failed but PayPal returned an access token "
-                        "or EUAT cookie. "
-                        "Continuing to authorization once; if BUYER_NOT_SET is "
-                        "returned, the full flow will restart with a fresh "
-                        "session/user/card instead of re-submitting signup on "
-                        "this already-consumed checkout."
+                        "Card/addCard failed with a partial access token but "
+                        "onboardAccount is empty (e.g. ISSUER_DECLINE). "
+                        "Ignoring that token and rotating card/identity "
+                        "({}/{}) instead of authorizing a buyer-less EC.",
+                        attempt,
+                        self.max_card_attempts,
                     )
-                    return
+                    self.state.euat_token = ""
+                    self._used_partial_signup_token = False
+                    self.state.signup_fallback_reason = ""
 
                 if attempt >= self.max_card_attempts:
                     raise RuntimeError(
@@ -6738,10 +6741,21 @@ class PayPalFlow:
                         f"{self.max_card_attempts} attempts"
                     )
 
-                self._wait_and_rotate_card("Card rejected by signup/addCard")
+                # ISSUER_DECLINE often sticks to the same synthetic identity;
+                # rotate email/user+card while keeping confirmed phone/address.
+                if self._has_signup_error_message(errors, "ISSUER_DECLINE"):
+                    self._wait_and_rotate_signup_identity(
+                        "ISSUER_DECLINE / card issuer rejected FI",
+                        attempt + 1,
+                    )
+                else:
+                    self._wait_and_rotate_card("Card rejected by signup/addCard")
                 continue
 
             if access_token:
+                # Non-card contingency with a token: only continue when we still
+                # have a plausible session. Prefer full-flow retry over a hollow
+                # authorize if onboard never bound a buyer.
                 self.state.euat_token = access_token
                 self._used_partial_signup_token = True
                 self.state.signup_fallback_reason = (
@@ -7951,14 +7965,19 @@ class PayPalFlow:
         result: object = None
         last_authorize_attempt = 0
         metadata_candidates = self._authorize_metadata_candidates()
-        for authorize_attempt in range(1, self.max_authorize_attempts + 1):
+        # Partial signup (no onboard buyer) almost never recovers via authorize
+        # retries — fail fast and let outer max_flow_attempts restart Phase 0.
+        authorize_budget = self.max_authorize_attempts
+        if self._used_partial_signup_token:
+            authorize_budget = min(authorize_budget, 1)
+        for authorize_attempt in range(1, authorize_budget + 1):
             last_authorize_attempt = authorize_attempt
             if authorize_attempt > 1:
                 logger.warning(
                     "authorize returned BUYER_NOT_SET; reloading Hagrid/Hermes "
                     "review context and retrying authorize attempt {}/{}...",
                     authorize_attempt,
-                    self.max_authorize_attempts,
+                    authorize_budget,
                 )
                 self._load_hagrid_review_context(
                     hermes_base_url,
@@ -7972,7 +7991,7 @@ class PayPalFlow:
             logger.info(
                 "authorize attempt {}/{} using metadata candidate {}",
                 authorize_attempt,
-                self.max_authorize_attempts,
+                authorize_budget,
                 sanitize_for_log({"token": metadata_id})["token"],
             )
             result = send_authorize(metadata_id)
@@ -8013,9 +8032,10 @@ class PayPalFlow:
                     logger.error(
                         "Authorization failed: BUYER_NOT_SET after {}/{} authorize "
                         "attempts. partial_signup_token={}. The current EC session "
-                        "has no buyer bound; outer flow retry will restart from Phase 0.",
+                        "has no buyer bound; outer flow retry will restart from Phase 0 "
+                        "when max_flow_attempts > 1.",
                         last_authorize_attempt,
-                        self.max_authorize_attempts,
+                        authorize_budget,
                         self._used_partial_signup_token,
                     )
                 else:

@@ -91,6 +91,10 @@ def make_flow(session, *, action_ids=False):
         country="TH",
     )
     flow.max_card_attempts = 1
+    flow.max_flow_attempts = 1
+    flow.max_authorize_attempts = 3
+    flow.card_retry_delay_seconds = 0.0
+    flow.card_retry_jitter_seconds = 0.0
     flow.state = SessionState(
         ba_token=flow.ba_token,
         ssrt="123456",
@@ -315,6 +319,90 @@ class FlowStateGuardTests(unittest.TestCase):
         # Redirect was followed (GET performed), not rejected.
         self.assertEqual(len(session.get_calls), 1)
         self.assertTrue(any("modxo_redirect_reason=ineligible" in str(url) for url, _ in session.get_calls))
+
+    def test_issuer_decline_with_partial_token_rotates_instead_of_authorizing(self):
+        """Card ISSUER_DECLINE + accessToken must NOT skip remaining card attempts.
+
+        The recent BR failure path returned CARD_GENERIC_ERROR with a hollow
+        token, then wasted authorize retries on BUYER_NOT_SET. Success cases
+        keep rotating until onboardAccount actually binds a buyer.
+        """
+        decline = {
+            "errors": [
+                {
+                    "message": "ISSUER_DECLINE",
+                    "checkpoints": ["addCard"],
+                    "errorData": {
+                        "0": {"field": "cardNumber", "code": "CARD_GENERIC_ERROR"},
+                        "accessToken": "hollow-token-should-be-ignored",
+                    },
+                    "contingency": True,
+                    "path": ["onboardAccount"],
+                }
+            ],
+            "data": {"onboardAccount": None},
+        }
+        success = {
+            "data": {
+                "onboardAccount": {
+                    "buyer": {
+                        "userId": "USER123",
+                        "auth": {"accessToken": "real-euat-token"},
+                    }
+                }
+            }
+        }
+        session = FakeSession()
+        flow = make_flow(session)
+        flow.max_card_attempts = 3
+        flow.card_retry_delay_seconds = 0.0
+        flow.card_retry_jitter_seconds = 0.0
+        original_card = flow.card.number
+        send_calls = {"n": 0}
+
+        def fake_send(_token, _url):
+            send_calls["n"] += 1
+            if send_calls["n"] == 1:
+                return decline
+            return success
+
+        with patch.object(flow, "_send_signup_attempt", side_effect=fake_send), patch(
+            "paypal.flow.generate_card",
+            return_value=CardInfo(number="5555555555554444", expiry="01/2031", cvv="321"),
+        ), patch(
+            "paypal.flow.generate_user",
+            return_value=UserInfo(
+                first_name="Bia",
+                last_name="Costa",
+                email="bia@example.test",
+                phone="5511999999999",
+                phone_local="11999999999",
+                phone_country_code="+55",
+                password="Test123!",
+                dob="02/02/1991",
+                cpf="987.654.321-00",
+            ),
+        ), patch("paypal.flow.time.sleep"):
+            flow._signup_with_card_retry(EC_TOKEN, "https://www.paypal.com/signup")
+
+        self.assertEqual(send_calls["n"], 2)
+        self.assertEqual(flow.state.user_id, "USER123")
+        self.assertEqual(flow.state.euat_token, "real-euat-token")
+        self.assertFalse(flow._used_partial_signup_token)
+        self.assertNotEqual(flow.card.number, original_card)
+
+    def test_buyer_not_set_is_full_flow_retryable(self):
+        flow = make_flow(FakeSession())
+        self.assertTrue(
+            flow._should_retry_full_flow(
+                {
+                    "status": "error",
+                    "error": "authorize returned BUYER_NOT_SET",
+                    "reason": "BUYER_NOT_SET",
+                    "retryable": True,
+                }
+            )
+        )
 
     def test_datadome_and_ineligible_errors_are_not_full_flow_retryable(self):
         self.assertFalse(

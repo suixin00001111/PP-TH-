@@ -928,7 +928,7 @@ class WebJob:
     phone_auto: bool = False
     debug: bool = False
     max_card_attempts: int = 5
-    max_flow_attempts: int = 1
+    max_flow_attempts: int = 3
     max_authorize_attempts: int = 3
     card_retry_delay_seconds: float = 6.0
     card_retry_jitter_seconds: float = 2.0
@@ -1080,7 +1080,7 @@ class WebJob:
                 "country": self.country,
                 "runtime_mode": self.runtime_mode,
             "profile": getattr(self, "profile", "real"),
-            "max_flow_attempts": getattr(self, "max_flow_attempts", 1),
+            "max_flow_attempts": getattr(self, "max_flow_attempts", 3),
                 "max_authorize_attempts": getattr(self, "max_authorize_attempts", 3),
                 "card_retry_delay_seconds": getattr(self, "card_retry_delay_seconds", 6.0),
                 "card_retry_jitter_seconds": getattr(self, "card_retry_jitter_seconds", 2.0),
@@ -1481,7 +1481,7 @@ def create_job(
     phone: str,
     debug: bool,
     max_card_attempts: int,
-    max_flow_attempts: int = 1,
+    max_flow_attempts: int = 3,
     max_authorize_attempts: int = 3,
     card_retry_delay_seconds: float = 6.0,
     card_retry_jitter_seconds: float = 2.0,
@@ -1632,7 +1632,7 @@ def create_job(
     try:
         max_flow_attempts = int(max_flow_attempts)
     except Exception:
-        max_flow_attempts = 1
+        max_flow_attempts = 3
     max_flow_attempts = max(1, min(max_flow_attempts, 5))
     try:
         max_authorize_attempts = int(max_authorize_attempts)
@@ -1846,7 +1846,7 @@ def run_job(job: WebJob) -> None:
                 card=card,
                 address=address,
                 max_card_attempts=job.max_card_attempts,
-                max_flow_attempts=getattr(job, "max_flow_attempts", 1),
+                max_flow_attempts=getattr(job, "max_flow_attempts", 3),
                 max_authorize_attempts=getattr(job, "max_authorize_attempts", 3),
                 card_retry_delay_seconds=getattr(job, "card_retry_delay_seconds", 6.0),
                 card_retry_jitter_seconds=getattr(job, "card_retry_jitter_seconds", 2.0),
@@ -2113,7 +2113,7 @@ class WebHandler(BaseHTTPRequestHandler):
                     phone=data.get("phone", ""),
                     debug=bool(data.get("debug", False)),
                     max_card_attempts=int(data.get("max_card_attempts", 5) or 5),
-                    max_flow_attempts=int(data.get("max_flow_attempts", 1) or 1),
+                    max_flow_attempts=int(data.get("max_flow_attempts", 3) or 3),
                     max_authorize_attempts=int(data.get("max_authorize_attempts", 3) or 3),
                     card_retry_delay_seconds=float(data.get("card_retry_delay_seconds", 6) or 0),
                     card_retry_jitter_seconds=float(data.get("card_retry_jitter_seconds", 2) or 0),
