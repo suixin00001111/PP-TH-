@@ -308,7 +308,7 @@ class PayPalFlow:
             logger.info("BA Token: {}", sanitize_for_log({"ba_token": self.ba_token})["ba_token"])
             logger.info("Email: {}", sanitize_for_log({"email": self.user.email})["email"])
             logger.info("Phone: {}", sanitize_for_log({"phone": self.user.phone})["phone"])
-            logger.info(f"Proxy: {self.proxy_config.label}")
+            logger.info("Proxy: {}", "on" if self.proxy_config.enabled else "off")
 
             self._phase0_initial_load()
             self._phase1_risk_controls()

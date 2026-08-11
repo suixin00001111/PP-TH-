@@ -13,6 +13,7 @@ from pathlib import Path
 
 import os
 import random
+import re
 from dataclasses import dataclass
 from typing import Iterable
 from urllib.parse import quote, unquote, urlsplit
@@ -186,12 +187,18 @@ class ProxyConfig:
 
     @property
     def label(self) -> str:
+        """Public status string for UI/logs — never host, user, or full URL."""
         if not self.enabled or self.entry is None:
-            return "proxy disabled"
-        base = self.entry.label
-        if self.resolved_from and self.resolved_from != (self.entry.scheme or ""):
-            return f"{base} (auto {self.entry.scheme} from {self.resolved_from})"
-        return base
+            note = (self.resolved_from or "").strip().lower()
+            if note == "direct":
+                return "直连"
+            return "代理关闭"
+        note = (self.resolved_from or "").strip().lower()
+        if note.startswith("system"):
+            return "代理开·系统"
+        if note.startswith("filled"):
+            return "代理开"
+        return "代理开"
 
     def with_entry(self, entry: ProxyEntry, *, resolved_from: str = "") -> "ProxyConfig":
         return ProxyConfig(
@@ -640,34 +647,43 @@ def resolve_outbound_proxy(
     filled_pool: Iterable[str] | None = None,
     allow_system_fallback: bool = True,
     allow_direct_fallback: bool = True,
+    filled_selection: str = "sequential",
     timeout: float = 12.0,
 ) -> tuple[ProxyEntry | None, str, int, str]:
     """Resolve outbound proxy (filled proxies win when provided).
 
     Strategy:
-      - User-filled residential/custom proxies are tried FIRST (multi-line pool,
-        in order; first working entry wins, with multi-scheme auto-upgrade).
+      - User-filled residential/custom proxies are tried FIRST (multi-line pool).
+        ``filled_selection``:
+          * ``sequential`` — top-to-bottom (connectivity test / diagnostics)
+          * ``random`` — shuffle pool at call time (job start: pick randomly,
+            then failover through remaining in that random order)
       - Local/system proxies are tried next only when allowed and nothing was
-        filled, or when filled lines all fail *and* system fallback is on
-        **and** the caller did not require a filled proxy (empty form).
+        filled (or filled failed *and* system fallback is on).
       - If nothing was filled and proxies fail, fall back to **direct** when the
         server/machine can reach the public internet (Linux VPS common case).
 
-    When the user filled one or more proxies, system/direct fallback is **off by
-    default intent**: ``allow_*`` still apply, but direct only runs with an empty
-    form. System fallback still runs after filled failures so a half-broken
-    residential line can fall back to a working local client — callers that must
-    stick to the filled pool should pass ``allow_system_fallback=False``.
+    When the user filled one or more proxies, callers that must stick to the
+    filled pool should pass ``allow_system_fallback=False`` /
+    ``allow_direct_fallback=False`` (Web job + Web test do this).
 
     Returns (entry|None, exit_ip, latency_ms, note).
     entry is None means direct (no application-level proxy).
+    ``note`` is intentionally coarse (``filled`` / ``direct`` / ``system``) so
+    host/user are not leaked into job logs or UI.
     """
     filled_lines = split_proxy_inputs(raw=filled_raw, pool=filled_pool)
     notes: list[str] = []
     system_entries = list_system_proxy_entries() if allow_system_fallback else []
     filled_entries, parse_notes = parse_proxy_candidates(pool=filled_lines)
-    notes.extend(parse_notes)
+    # Parse notes may contain raw lines — keep count only for public errors.
+    if parse_notes:
+        notes.append(f"parse-failed:{len(parse_notes)}")
     has_filled = bool(filled_lines)
+    selection = (filled_selection or "sequential").strip().lower() or "sequential"
+    if selection == "random" and len(filled_entries) > 1:
+        filled_entries = list(filled_entries)
+        random.shuffle(filled_entries)
 
     def _try_entry(entry: ProxyEntry, tag: str) -> tuple[ProxyEntry, str, int, str] | None:
         try:
@@ -682,29 +698,32 @@ def resolve_outbound_proxy(
             exit_ip, latency_ms = probe_proxy_entry(entry, timeout=timeout)
             return entry, exit_ip, latency_ms, tag
         except Exception as exc:
-            notes.append(f"{tag}: {exc}")
+            # Do not embed host/user/URL in notes (job logs surface these).
+            err = str(exc)
+            if len(err) > 120:
+                err = err[:117] + "..."
+            # Strip obvious URL / auth@host fragments from probe errors.
+            err = re.sub(r"(?i)\b(?:https?|socks5h?)://\S+", "<proxy>", err)
+            err = re.sub(r"\b\S+@\S+:\d{2,5}\b", "<proxy>", err)
+            notes.append(f"{tag}: {err}")
             return None
 
-    # 1) User-filled residential / custom pool first (ordered failover)
-    for idx, filled_entry in enumerate(filled_entries, start=1):
-        tag = f"filled#{idx}" if len(filled_entries) > 1 else "filled"
-        hit = _try_entry(filled_entry, tag)
+    # 1) User-filled residential / custom pool
+    for filled_entry in filled_entries:
+        hit = _try_entry(filled_entry, "filled")
         if hit:
             working, exit_ip, latency_ms, used_tag = hit
             if working.scheme != filled_entry.scheme:
-                used_tag = f"{used_tag}-auto-{working.scheme}"
-            if len(filled_entries) > 1:
-                used_tag = f"{used_tag}/{len(filled_entries)}"
+                used_tag = f"filled-auto-{working.scheme}"
             return working, exit_ip, latency_ms, used_tag
 
     # 2) System / local proxy fallback (only when allowed).
-    # Job path with an explicit filled proxy should pass allow_system_fallback=False
-    # so a green "test" cannot silently mean Clash 7897 while the residential line is dead.
     if allow_system_fallback:
         for system_entry in system_entries:
-            hit = _try_entry(system_entry, f"system-fallback:{system_entry.label}")
+            hit = _try_entry(system_entry, "system")
             if hit:
-                return hit
+                working, exit_ip, latency_ms, _ = hit
+                return working, exit_ip, latency_ms, "system"
 
     # 3) Direct fallback only when user did not fill a proxy
     if allow_direct_fallback and not has_filled:
@@ -714,7 +733,7 @@ def resolve_outbound_proxy(
         except Exception as exc:
             notes.append(f"direct: {exc}")
 
-    # Compose actionable error (Chinese)
+    # Compose actionable error (Chinese) — no host/user in message.
     parts = [
         "出网探测失败（已尝试："
         + ("填写代理池/" if has_filled else "")
@@ -725,14 +744,12 @@ def resolve_outbound_proxy(
     if has_filled:
         parts.append(
             f"已填写 {len(filled_lines)} 条代理，均未能完成 HTTPS 出网。"
-            "常见原因：cliproxy 拒绝当前公网 IP（forbidden ip not supported）、"
-            "节点失效、账号密码错误、或协议需 socks5h。"
-            "可换一条住宅节点，或把本机公网 IP 加白名单后再测。"
+            "常见原因：节点拒绝当前公网 IP、节点失效、账号密码错误、或协议需 socks5h。"
+            "可换节点、加白名单，或再填多条后重试。"
         )
     if system_entries and allow_system_fallback:
-        labels = ", ".join(e.label for e in system_entries[:4])
         parts.append(
-            f"系统/本地代理已检测到 [{labels}]，但当前无法完成 HTTPS 出网"
+            "系统/本地代理已检测到，但当前无法完成 HTTPS 出网"
             "（常见：只开了系统代理开关、未开 TUN，或本地桥接端口是残留死连接）。"
             "若本机其它程序能上网，请确认已开 TUN/虚拟网卡，使流量在系统层出网。"
         )
@@ -742,12 +759,12 @@ def resolve_outbound_proxy(
         "可行处理：1) 打开客户端 TUN/虚拟网卡后再跑（可清空代理框）；"
         "2) 或在代理商后台把本机公网 IP 加白名单后关 TUN 用填写代理；"
         "3) 系统代理模式需客户端本身已能浏览器正常上网；"
-        "4) 可一次填写多条代理（换行分隔），系统会按顺序自动切换可用节点；"
+        "4) 可一次填写多条代理（每行一条），任务开始时随机选用；"
         "5) 服务器直连可用时，请清空代理框。"
     )
-    detail = " | ".join(notes[-6:])
+    detail = " | ".join(notes[-4:])
     if detail:
-        parts.append(f"技术详情: {detail[:500]}")
+        parts.append(f"技术详情: {detail[:320]}")
     raise ValueError("".join(parts))
 
 

@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from paypal.proxy import (
+    ProxyConfig,
     ProxyEntry,
     parse_proxy_candidates,
     resolve_outbound_proxy,
@@ -81,14 +82,14 @@ class ResolveOutboundProxyTests(unittest.TestCase):
         self.assertEqual(len(entries), 2)
         self.assertTrue(any("parse#" in n for n in notes))
 
-    def test_multi_proxy_failover_uses_second(self):
-        first = ProxyEntry(host="dead.example", port=1, scheme="http", username="u", password="p")
-        second = ProxyEntry(host="live.example", port=2, scheme="http", username="u", password="p")
+    def test_random_selection_shuffles_before_probe(self):
+        first = ProxyEntry(host="a.example", port=1, scheme="http", username="u", password="p")
+        second = ProxyEntry(host="b.example", port=2, scheme="http", username="u", password="p")
+        order: list[str] = []
 
         def fake_resolve(entry, timeout=12.0):
-            if entry.host == "dead.example":
-                raise ValueError("dead")
-            return entry, "9.9.9.9", 33
+            order.append(entry.host)
+            return entry, "9.9.9.9", 11
 
         with patch("paypal.proxy.list_system_proxy_entries", return_value=[]), patch(
             "paypal.proxy.resolve_working_proxy_entry", side_effect=fake_resolve
@@ -97,17 +98,48 @@ class ResolveOutboundProxyTests(unittest.TestCase):
             return_value=([first, second], []),
         ), patch(
             "paypal.proxy.split_proxy_inputs",
-            return_value=["http://u:p@dead.example:1", "http://u:p@live.example:2"],
+            return_value=["http://u:p@a.example:1", "http://u:p@b.example:2"],
+        ), patch(
+            "paypal.proxy.random.shuffle",
+            side_effect=lambda seq: seq.reverse(),
         ):
             entry, ip, ms, note = resolve_outbound_proxy(
                 "pool",
                 allow_system_fallback=False,
                 allow_direct_fallback=False,
+                filled_selection="random",
             )
-        self.assertEqual(entry.host, "live.example")
-        self.assertEqual(ip, "9.9.9.9")
-        self.assertIn("filled#2", note)
-        self.assertIn("/2", note)
+        # shuffle reversed [a,b] -> [b,a]; first hit is b
+        self.assertEqual(entry.host, "b.example")
+        self.assertEqual(order[0], "b.example")
+        self.assertTrue(note.startswith("filled"))
+
+    def test_sequential_keeps_input_order(self):
+        first = ProxyEntry(host="a.example", port=1, scheme="http", username="u", password="p")
+        second = ProxyEntry(host="b.example", port=2, scheme="http", username="u", password="p")
+        order: list[str] = []
+
+        def fake_resolve(entry, timeout=12.0):
+            order.append(entry.host)
+            return entry, "1.1.1.1", 5
+
+        with patch("paypal.proxy.list_system_proxy_entries", return_value=[]), patch(
+            "paypal.proxy.resolve_working_proxy_entry", side_effect=fake_resolve
+        ), patch(
+            "paypal.proxy.parse_proxy_candidates",
+            return_value=([first, second], []),
+        ), patch(
+            "paypal.proxy.split_proxy_inputs",
+            return_value=["http://u:p@a.example:1", "http://u:p@b.example:2"],
+        ):
+            entry, ip, ms, note = resolve_outbound_proxy(
+                "pool",
+                allow_system_fallback=False,
+                allow_direct_fallback=False,
+                filled_selection="sequential",
+            )
+        self.assertEqual(entry.host, "a.example")
+        self.assertEqual(order[0], "a.example")
 
     def test_filled_does_not_use_system_when_fallback_off(self):
         """Web/job contract: filled pool fails => no silent Clash 7897 success."""
@@ -135,6 +167,15 @@ class ResolveOutboundProxyTests(unittest.TestCase):
         self.assertIn("填写", str(ctx.exception))
         mock_sys.assert_not_called()
         mock_direct.assert_not_called()
+
+    def test_proxy_config_label_hides_endpoint(self):
+        entry = ProxyEntry(host="secret.example", port=3010, scheme="socks5h", username="u", password="p")
+        cfg = ProxyConfig(enabled=True, entry=entry, resolved_from="filled")
+        self.assertEqual(cfg.label, "代理开")
+        self.assertNotIn("secret", cfg.label)
+        self.assertNotIn("u", cfg.label)
+        off = ProxyConfig(enabled=False, entry=None, resolved_from="direct")
+        self.assertEqual(off.label, "直连")
 
 
 if __name__ == "__main__":

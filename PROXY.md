@@ -9,12 +9,13 @@
 
 ## 1. 设计目标
 
-1. **优先使用你在 Web 填写的代理**（主机 / 端口 / 账号 / 密码不变）；**支持一次填多条**（换行 / `;` / `|`），按顺序故障切换。
-2. **不依赖 TUN 才能识别填写的代理**：对住宅节点自动尝试 `socks5h` / `socks5` / `http`。
+1. **优先使用你在 Web 填写的代理**（主机 / 端口 / 账号 / 密码不变）；**支持一次填多条**（换行 / `;` / `|`）。
+2. **任务开始时对代理池随机打乱后选用**（首条可用即用；若首条挂了会继续试池内其余）。连通性「测试」仍按填写顺序，便于复现。
 3. **填写了代理时，「测试」与「任务」只认填写池**，不会静默改用本机 Clash `7897` 或直连（避免「测试绿、任务挂」）。
-4. 仅当**未填代理**时：可回退系统代理，再不行则 **直连**（VPS 常见）。
-5. **明确失败原因**：cliproxy `forbidden ip=x.x.x.x not supported` 会中文提示，而不是只报 curl 97/28。
-6. 探测与会话使用 `ssl_env` 镜像 CA，减少 Windows 中文路径 **curl 77**。
+4. **节点详情不出现在任务详情、日志或结果中**（仅「代理开 / 关 / 直连」）。「测试代理」可显示出口 IP 以便确认连通。
+5. 仅当**未填代理**时：可回退系统代理，再不行则 **直连**（VPS 常见）。
+6. **明确失败原因**：cliproxy `forbidden ip=...` 等会中文提示，而不是只报 curl 97/28。
+7. 探测与会话使用 `ssl_env` 镜像 CA，减少 Windows 中文路径 **curl 77**。
 
 ## 2. 支持的填写格式
 
@@ -29,7 +30,7 @@ socks5h://user:pass@host:port
 host:port
 ```
 
-多条（代理池，按顺序试到第一条可用）：
+多条（代理池；**任务开始时随机选**，再在随机序中故障切换）：
 
 ```text
 user1:pass1@host1:port1
@@ -50,7 +51,7 @@ socks5h://user3:pass3@host3:port3
 
 | 顺序 | 条件 | 行为 |
 |------|------|------|
-| 1 | Web/CLI **填写了**代理（可多行） | 按顺序探测池内节点；每条对同一 host/user/pass 尝试 `socks5h` → `socks5` → `http` → `https` |
+| 1 | Web/CLI **填写了**代理（可多行） | 任务：`random` 打乱后探测；测试：`sequential`。每条对同一 host/user/pass 尝试 `socks5h` → `socks5` → `http` → `https` |
 | 2 | **未填** 且允许系统回退 | 探测本机客户端（如 `127.0.0.1:7897`） |
 | 3 | **未填** 且仍无可用出口 | **`direct`**，任务继续走机器默认路由 |
 | 4 | **已填** 但池内全部失败 | 抛出中文错误（**不**回退 7897/直连） |
@@ -58,20 +59,15 @@ socks5h://user3:pass3@host3:port3
 Web 任务 / 「测试代理」在填写非空时：`allow_system_fallback=False`、`allow_direct_fallback=False`。  
 空表单才允许系统/直连。
 
-成功后任务日志会出现类似：
+成功后任务日志仅粗粒度状态（**无 host/账号**）：
 
 ```text
-Proxy resolved for job: socks5h://user:***@us.cliproxy.io:3010 exit_ip=213.x.x.x note=filled#2/3 pool=3
-HTTP outbound proxy: socks5h://user:***@us.cliproxy.io:3010
+Proxy resolved for job: on pool=3
+HTTP outbound proxy: on
+Proxy: on
 ```
 
-页面任务头示例：
-
-```text
-socks5://...@us.cliproxy.io:3010 (auto socks5h from filled-auto-socks5h)
-```
-
-含义：**仍是你填的节点**，仅协议自动改为 `socks5h`（DNS 也走代理）。
+页面任务头示例：`#abc · 创建于 … · 代理开 · …`
 
 ## 4. 为什么 cliproxy 填 http 会挂、socks5h 能通？
 
@@ -121,9 +117,9 @@ Chromium **不支持带用户名密码的 SOCKS5**。
 `POST /api/proxy/test` 与任务使用同一套 `resolve_outbound_proxy`。
 
 - 填写了节点 → **只测填写池**；全部失败则报错（不会用本机 7897 冒充成功）。
-- 多条时返回 `proxy_pool_size`、`resolve_note`（如 `filled#2/3`）。
+- 可返回出口 IP / 延迟 / 池大小，**不返回**具体 host、账号或 URL。
 
-成功返回字段包括：`exit_ip`、`resolved_scheme`、`resolve_note`、`proxy_pool_size`、`latency_ms`。
+成功返回字段包括：`exit_ip`、`proxy_pool_size`、`latency_ms`、`proxy_label`（仅「代理开」等）。
 
 ## 8. 推荐用法
 

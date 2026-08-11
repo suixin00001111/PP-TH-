@@ -435,6 +435,39 @@ def redact_text(value: Any) -> str:
     text = re.sub(r"\bBA-[A-Za-z0-9]{8,80}\b", lambda m: mask_middle(m.group(0), 4, 4), text)
     text = re.sub(r"\bEC-[A-Za-z0-9]{8,80}\b", lambda m: mask_middle(m.group(0), 4, 4), text)
 
+    # Outbound proxy endpoints — never show host/user/URL in job logs or UI.
+    text = re.sub(
+        r"(?i)\b(?:https?|socks5h?)://[^\s\"'<>]+",
+        "<proxy>",
+        text,
+    )
+    text = re.sub(
+        r"(?i)\b(?:[\w.%+\-]+(?::[\w.%+\-]*)?@)?[\w.\-]+(?:\.\w{2,}|(?:localhost)):\d{2,5}\b",
+        "<proxy>",
+        text,
+    )
+    text = re.sub(
+        r"(?i)(Proxy resolved for job:)\s+\S+",
+        r"\1 <redacted>",
+        text,
+    )
+    text = re.sub(
+        r"(?i)(HTTP outbound proxy:)\s+\S+",
+        r"\1 <redacted>",
+        text,
+    )
+    text = re.sub(
+        r"(?i)(Roxy will bind application proxy[^:]*:)\s+.+",
+        r"\1 代理开",
+        text,
+    )
+    text = re.sub(
+        r"(?i)^(Proxy:\s*)(?!代理|直连|关闭|on|off|enabled|disabled).+$",
+        r"\1代理开",
+        text,
+        flags=re.MULTILINE,
+    )
+
     # Email, CPF, card-like long digit sequences, international phone-like values.
     text = re.sub(
         r"\b([A-Za-z0-9._%+\-]{1,64})@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})\b",
@@ -459,6 +492,20 @@ def sanitize_payload(value: Any, key: str = "") -> Any:
     """Redact sensitive values before returning API payloads to the browser."""
     compact_key = key.lower().replace("_", "").replace("-", "")
     if compact_key in {"cookies", "sessioncookies", "merchantcookies"}:
+        return "<redacted>"
+    # Never return raw proxy endpoints / pool strings to the browser.
+    if compact_key in {
+        "proxy",
+        "proxyraw",
+        "proxyurl",
+        "proxy_url",
+        "httpproxy",
+        "httpsproxy",
+        "allproxy",
+        "proxies",
+    }:
+        if value in (None, "", False, True, 0, 1):
+            return value
         return "<redacted>"
     if isinstance(value, dict):
         return {k: sanitize_payload(v, str(k)) for k, v in value.items()}
@@ -675,6 +722,7 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
     filled_lines = split_proxy_inputs(raw=raw)
     # Filled custom proxy: stick to the pool only (same contract as run_job).
     # Empty form: allow system then direct (VPS / desktop TUN probe).
+    # Test uses sequential order so results are deterministic; jobs use random.
     allow_system = not bool(filled_lines)
     allow_direct = not bool(filled_lines)
     saved_env = scrub_process_proxy_env()
@@ -683,6 +731,7 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
             raw,
             allow_system_fallback=allow_system,
             allow_direct_fallback=allow_direct,
+            filled_selection="sequential",
             timeout=15.0,
         )
     finally:
@@ -692,7 +741,7 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
         if filled_lines:
             raise ValueError(
                 "填写的代理均不可用（测试不会回退到本机系统代理/直连）。"
-                "请换节点、加白名单，或一次填写多条（换行）自动切换。"
+                "请换节点、加白名单，或一次填写多条（换行；任务开始时随机选用）。"
             )
         proxy_config = ProxyConfig(
             enabled=False,
@@ -728,25 +777,24 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
 
     if working is None or note == "direct":
         mode = "direct"
-        scheme = "direct"
-        label = "直连 (direct)"
+        label = "直连"
     else:
         mode = "custom" if filled_lines else "system"
-        scheme = getattr(working, "scheme", "") or ""
-        label = proxy_config.label
+        label = "代理开" if filled_lines else "代理开·系统"
     pool_n = len(filled_lines)
+    # Connectivity test may show exit IP (needed to verify the node works).
+    # Never return host/user/URL/scheme detail of the selected line.
     msg_bits = []
     if exit_ip:
         msg_bits.append(f"出口 IP {exit_ip}")
-    msg_bits.append(f"路由: {note}")
     if pool_n > 1:
-        msg_bits.append(f"代理池 {pool_n} 条")
+        msg_bits.append(f"池 {pool_n} 条·已测通")
+    elif pool_n == 1:
+        msg_bits.append("节点可用")
     return {
         "ok": True,
         "mode": mode,
         "proxy_label": label,
-        "resolved_scheme": scheme,
-        "resolve_note": note,
         "proxy_pool_size": pool_n,
         "status": status,
         "exit_ip": exit_ip,
@@ -949,7 +997,12 @@ class WebJob:
                 "max_card_attempts": self.max_card_attempts,
                 "proxy_enabled": self.proxy_enabled,
                 "proxy_mode": getattr(self, "proxy_mode", "custom"),
-                "proxy_label": self.proxy_label,
+                # Coarse status only — never host/user/URL (see ProxyConfig.label).
+                "proxy_label": (
+                    "代理开"
+                    if self.proxy_enabled
+                    else (self.proxy_label if self.proxy_label in {"直连", "代理关闭"} else "代理关闭")
+                ),
                 "generated": sanitize_payload(self.generated),
                 "awaiting_otp": self.status == "awaiting_otp",
                 "awaiting_prompt": redact_text(self.awaiting_prompt),
@@ -1598,17 +1651,14 @@ def run_job(job: WebJob) -> None:
                     filled_raw = proxy_config.entry.url or ""
                 filled_lines = split_proxy_inputs(raw=filled_raw)
                 # Explicit filled pool: do NOT fall back to half-dead Clash 7897 /
-                # direct. That was the "测试可用、任务失败" gap (test used system,
-                # job re-probed and died, or vice versa).
+                # direct. Multi-line pool is shuffled once at job start (random pick).
                 require_filled = bool(filled_lines) or bool(job.proxy_enabled)
                 working, exit_ip, latency_ms, note = resolve_outbound_proxy(
                     filled_raw,
                     allow_system_fallback=not require_filled,
                     allow_direct_fallback=not require_filled,
+                    filled_selection="random",
                     timeout=15.0,
-                )
-                original_scheme = (
-                    proxy_config.entry.scheme if proxy_config.entry else ""
                 )
                 # working is None => direct public egress (common on clean VPS)
                 if working is None or note == "direct":
@@ -1622,12 +1672,8 @@ def run_job(job: WebJob) -> None:
                         entry=None,
                         resolved_from=note or "direct",
                     )
-                    logger.info(
-                        "Proxy resolved for job: direct exit_ip={} latency={}ms note={}",
-                        exit_ip or "",
-                        latency_ms,
-                        note,
-                    )
+                    # Coarse log only — no host/user/URL/exit detail in job stream.
+                    logger.info("Proxy resolved for job: direct")
                 else:
                     proxy_config = ProxyConfig(
                         enabled=True,
@@ -1635,20 +1681,9 @@ def run_job(job: WebJob) -> None:
                         resolved_from=note,
                     )
                     logger.info(
-                        "Proxy resolved for job: {} exit_ip={} latency={}ms note={} pool={} filled_scheme={}",
-                        proxy_config.label,
-                        exit_ip or "",
-                        latency_ms,
-                        note,
+                        "Proxy resolved for job: on pool={}",
                         len(filled_lines) or 1,
-                        original_scheme,
                     )
-                    if "system-fallback" in note or note.startswith("system"):
-                        logger.warning(
-                            "Using system/local proxy path ({}). "
-                            "No filled residential proxy was provided.",
-                            note,
-                        )
                 job._proxy_config = proxy_config
             except Exception:
                 restore_process_proxy_env(saved_proxy_env)
@@ -1671,7 +1706,7 @@ def run_job(job: WebJob) -> None:
             )
 
             logger.info("Web job started: {}", job.id)
-            logger.info("Proxy: {}", proxy_config.label)
+            logger.info("Proxy: {}", "on" if proxy_config.enabled else "off")
             # Proxy already resolved above (explicit filled endpoint only).
             logger.info("Runtime mode: {}", getattr(job, "runtime_mode", "protocol"))
             logger.info("SMSBower: {}", "on" if getattr(job, "smsbower_enabled", False) else "off")

@@ -240,10 +240,7 @@ class PayPalFlow:
         self.state = SessionState(ba_token=ba_token)
         if keep_roxy_browser or str(self.fingerprint_source or "").lower() in {"roxy", "auto", "browser"}:
             if self.proxy_config.url:
-                logger.info(
-                    "Roxy will bind application proxy (not 本机网络): {}",
-                    self.proxy_config.label,
-                )
+                logger.info("Roxy will bind application proxy (not 本机网络): on")
             else:
                 logger.warning(
                     "Roxy fingerprint/runtime has NO application proxy → Roxy UI shows "
@@ -721,7 +718,10 @@ class PayPalFlow:
                 logger.debug("Roxy mismatched-proxy browser cleanup failed: {}", exc)
             self.state.roxy_browser = {}
 
-        logger.info("Opening Roxy browser for DataDome runtime with proxy: {}", self.proxy_config.label)
+        logger.info(
+            "Opening Roxy browser for DataDome runtime with proxy: {}",
+            "on" if self.proxy_config.enabled else "off",
+        )
         runtime = capture_roxy_runtime_profile(
             keep_browser=True,
             proxy_url=self.proxy_config.url or "",
@@ -2336,7 +2336,7 @@ class PayPalFlow:
         logger.info("BA Token: {}", sanitize_for_log({"ba_token": self.ba_token})["ba_token"])
         logger.info("Email: {}", sanitize_for_log({"email": self.user.email})["email"])
         logger.info("Phone: {}", sanitize_for_log({"phone": self.user.phone})["phone"])
-        logger.info(f"Proxy: {self.proxy_config.label}")
+        logger.info("Proxy: {}", "on" if self.proxy_config.enabled else "off")
         self.captcha_bypass_mode = paypal_captcha_bypass_mode()
         logger.info("CAPTCHA mode: {}", self.captcha_bypass_mode)
         self._log_profile_consistency()

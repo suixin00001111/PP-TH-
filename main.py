@@ -70,7 +70,7 @@ def main():
 
     logger.info("Country: {}", country)
     logger.info("User: {} {}", user.first_name, user.last_name)
-    logger.info("Proxy: {}", proxy_config.label)
+    logger.info("Proxy: {}", "on" if proxy_config.enabled else "off")
     logger.info("Runtime: {}", resolved.as_public_dict())
 
     sms_provider = None

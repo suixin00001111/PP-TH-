@@ -592,7 +592,11 @@ class PayPalSession:
         else:
             self.client = httpx.Client(**client_kwargs)
             logger.info("HTTP client: httpx (http2={})", client_kwargs.get("http2"))
-        logger.info("HTTP outbound proxy: {}", self.proxy_label)
+        # Coarse only — never log host/user/URL (job UI streams these lines).
+        logger.info(
+            "HTTP outbound proxy: {}",
+            "on" if self.proxy_url else "off",
+        )
 
     @staticmethod
     def _unlink_security_challenge_cache() -> list[str]:
