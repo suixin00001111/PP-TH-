@@ -119,6 +119,7 @@ def make_flow(session, *, action_ids=False):
     flow._billing_address_autocomplete_succeeded = False
     flow._roxy_skipped_telemetry_families = set()
     flow._signup_billing_address_prepared = False
+    flow._phone_otp_confirmed = False
     flow._headless_session = None
     flow._headless_optimized_session = None
     flow.captcha_bypass_mode = "off"
@@ -403,17 +404,30 @@ class FlowStateGuardTests(unittest.TestCase):
                 }
             )
         )
+        # Once OTP is confirmed, do not restart full flow (would re-ask phone/OTP).
+        flow._phone_otp_confirmed = True
+        self.assertFalse(
+            flow._should_retry_full_flow(
+                {
+                    "status": "error",
+                    "error": "authorize returned BUYER_NOT_SET",
+                    "reason": "BUYER_NOT_SET",
+                    "retryable": True,
+                }
+            )
+        )
 
     def test_datadome_and_ineligible_errors_are_not_full_flow_retryable(self):
+        flow = make_flow(FakeSession())
         self.assertFalse(
-            PayPalFlow._should_retry_full_flow_exception(
+            flow._should_retry_full_flow_exception(
                 RuntimeError(
                     "Phase 0 still blocked by DataDome/challenge page after load (status=403)."
                 )
             )
         )
         self.assertFalse(
-            PayPalFlow._should_retry_full_flow_exception(
+            flow._should_retry_full_flow_exception(
                 RuntimeError(
                     "PayPal ModXO redirect reason=ineligible: BA token/session is not eligible "
                     "for guest create-account checkout."
@@ -421,10 +435,105 @@ class FlowStateGuardTests(unittest.TestCase):
             )
         )
         self.assertTrue(
-            PayPalFlow._should_retry_full_flow_exception(
+            flow._should_retry_full_flow_exception(
                 RuntimeError(
                     "Create account flow did not produce an EC checkout token (no valid EC token)."
                 )
+            )
+        )
+
+    def test_confirmed_otp_blocks_full_flow_restart_on_signup_failure(self):
+        """After OTP, signup failures must not restart Phase 0 (re-prompt phone/OTP)."""
+        flow = make_flow(FakeSession())
+        flow._phone_otp_confirmed = True
+        self.assertFalse(
+            flow._should_retry_full_flow_exception(
+                RuntimeError(
+                    "Signup failed: no usable access token obtained. "
+                    "PayPal onboardAccount did not create a member session."
+                )
+            )
+        )
+        self.assertFalse(
+            flow._should_retry_full_flow_exception(
+                RuntimeError("Signup failed: card was rejected after 5 attempts")
+            )
+        )
+        # Pre-OTP EC failures still restart even if flag is somehow set — EC token
+        # marker is still allowed; but after real OTP we only hit signup markers.
+        flow._phone_otp_confirmed = False
+        self.assertTrue(
+            flow._should_retry_full_flow_exception(
+                RuntimeError(
+                    "Signup failed: no usable access token obtained. "
+                    "PayPal onboardAccount did not create a member session."
+                )
+            )
+        )
+
+    def test_opaque_onboard_failure_rotates_in_place_without_full_restart(self):
+        """'Cannot destructure property index' empty onboard must keep phone/OTP."""
+        opaque = {
+            "errors": [
+                {
+                    "message": "Cannot destructure property 'index' of undefined",
+                    "path": ["onboardAccount"],
+                    "checkpoints": ["createMemberAccount"],
+                }
+            ],
+            "data": {"onboardAccount": None},
+        }
+        success = {
+            "data": {
+                "onboardAccount": {
+                    "buyer": {
+                        "userId": "USER999",
+                        "auth": {"accessToken": "real-euat-after-rotate"},
+                    }
+                }
+            }
+        }
+        session = FakeSession()
+        flow = make_flow(session)
+        flow.max_card_attempts = 3
+        flow.card_retry_delay_seconds = 0.0
+        flow.card_retry_jitter_seconds = 0.0
+        flow._phone_otp_confirmed = True
+        original_phone = flow.user.phone
+        send_calls = {"n": 0}
+
+        def fake_send(_token, _url):
+            send_calls["n"] += 1
+            if send_calls["n"] == 1:
+                return opaque
+            return success
+
+        with patch.object(flow, "_send_signup_attempt", side_effect=fake_send), patch(
+            "paypal.flow.generate_card",
+            return_value=CardInfo(number="5555555555554444", expiry="01/2031", cvv="321"),
+        ), patch(
+            "paypal.flow.generate_user",
+            side_effect=lambda phone="", country="TH": UserInfo(
+                first_name="Bia",
+                last_name="Costa",
+                email="bia@example.test",
+                phone=phone or original_phone,
+                phone_local="11999999999",
+                phone_country_code="+55",
+                password="Test123!",
+                dob="02/02/1991",
+                cpf="987.654.321-00",
+            ),
+        ), patch("paypal.flow.time.sleep"):
+            flow._signup_with_card_retry(EC_TOKEN, "https://www.paypal.com/signup")
+
+        self.assertEqual(send_calls["n"], 2)
+        self.assertEqual(flow.state.user_id, "USER999")
+        self.assertEqual(flow.user.phone, original_phone)
+        self.assertTrue(flow._phone_otp_confirmed)
+        self.assertFalse(
+            flow._should_retry_full_flow_exception(
+                RuntimeError("Signup failed: no usable access token obtained after 3 in-place")
             )
         )
 

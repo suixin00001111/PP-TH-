@@ -299,6 +299,10 @@ class PayPalFlow:
         self._billing_address_autocomplete_succeeded = False
         self._roxy_skipped_telemetry_families: set[str] = set()
         self._signup_billing_address_prepared = False
+        # Set after ConfirmRiskBasedTwoFactorPhoneConfirmation succeeds.
+        # Full-flow retries after this point must not re-prompt phone/OTP unless
+        # the checkout session itself was discarded for a non-signup reason.
+        self._phone_otp_confirmed = False
         self._headless_session: Any | None = None
         self._headless_optimized_session: Any | None = None
         self._datadome_browser_document: dict[str, Any] = {}
@@ -2344,21 +2348,51 @@ class PayPalFlow:
     def _should_retry_full_flow(self, result: dict[str, object] | None) -> bool:
         if not isinstance(result, dict):
             return False
-        if result.get("retryable") is True:
-            return True
-        return result.get("reason") in {
+        retryable = result.get("retryable") is True or result.get("reason") in {
             "BUYER_NOT_SET",
             "buyer_not_set_after_partial_signup",
         }
+        if not retryable:
+            return False
+        # Phone OTP is bound to the current EC/checkout session. Restarting from
+        # Phase 0 after a confirmed OTP re-opens getOtpChallenge and forces the
+        # operator to re-enter phone + code (the reported multi-prompt loop).
+        if getattr(self, "_phone_otp_confirmed", False):
+            logger.warning(
+                "Skipping full-flow restart after confirmed OTP "
+                "(reason={}, error={}). Failing this attempt instead of re-prompting phone/OTP.",
+                result.get("reason") or "",
+                str(result.get("error") or "")[:160],
+            )
+            return False
+        return True
 
-    @staticmethod
-    def _should_retry_full_flow_exception(error: Exception) -> bool:
+    def _should_retry_full_flow_exception(self, error: Exception) -> bool:
         text = str(error)
+        # Pre-OTP / pre-signup session problems still warrant a clean restart.
+        pre_otp_markers = (
+            "Create account flow did not produce an EC checkout token",
+        )
+        if any(marker in text for marker in pre_otp_markers):
+            return True
+
+        # After phone OTP is confirmed, signup/card failures must be handled
+        # in-place (rotate card/identity, keep the same confirmed phone).
+        # Restarting Phase 0 forces a new EC token and re-prompts phone/OTP —
+        # that loop is the user-facing bug ("反复输入手机号和验证码").
+        if getattr(self, "_phone_otp_confirmed", False):
+            logger.warning(
+                "Not restarting full flow after confirmed OTP for: {}. "
+                "In-place signup/card retries already exhausted.",
+                text[:240],
+            )
+            return False
+
         retry_markers = (
             "Signup failed: card was rejected",
             "Signup failed: no usable access token",
+            "Signup failed: createMemberAccount/OAS_ERROR",
             "ACCOUNT_ALREADY_EXISTS and no prior access token",
-            "Create account flow did not produce an EC checkout token",
         )
         return any(marker in text for marker in retry_markers)
 
@@ -2404,13 +2438,17 @@ class PayPalFlow:
         self._used_partial_signup_token = False
         self._billing_address_autocomplete_succeeded = False
         self._signup_billing_address_prepared = False
+        # New EC session always needs a fresh phone challenge.
+        self._phone_otp_confirmed = False
+        self._smsbower_activation = None
         self._headless_session = None
         self._headless_optimized_session = None
         self._datadome_browser_document = {}
         self._on_full_retry_generated(flow_attempt)
 
         logger.info(
-            "Regenerated retry identity: email={}, phone={}, card={} exp={}, address={}, {}-{} (preserved)",
+            "Regenerated retry identity: email={}, phone={} (preserved), card={} exp={}, "
+            "address={}, {}-{} (preserved). New session will re-verify phone OTP.",
             sanitize_for_log({"email": self.user.email})["email"],
             sanitize_for_log({"phone": self.user.phone})["phone"],
             self._masked_card_number(),
@@ -5722,6 +5760,7 @@ class PayPalFlow:
         ) or {}
         confirm_state = confirm_data.get("state", "")
         if confirm_state == "CONFIRMED":
+            self._phone_otp_confirmed = True
             logger.success("OTP confirmed successfully!")
             return True
 
@@ -6612,6 +6651,51 @@ class PayPalFlow:
                 return True
         return False
 
+    @staticmethod
+    def _is_opaque_onboard_retryable_signup_error(errors: list[dict[str, Any]]) -> bool:
+        """Empty onboardAccount failures that should rotate identity in-place.
+
+        PayPal sometimes returns a hollow GraphQL failure (e.g. frontend
+        "Cannot destructure property 'index' of ...") without a card checkpoint
+        and without an access token. Restarting the whole flow re-prompts OTP;
+        rotating email/card while keeping the confirmed phone is safer.
+        """
+        if not errors:
+            # Truly empty onboardAccount + no errors still warrants in-place retry.
+            return True
+        opaque_needles = (
+            "cannot destructure",
+            "onboardaccount",
+            "creatememberaccount",
+            "oas_error",
+            "validation_error",
+            "internal service error",
+            "unexpected error",
+            "failed to create",
+        )
+        for err in errors or []:
+            if PayPalFlow._is_card_related_signup_error([err]):
+                continue
+            blob = " ".join(
+                str(part or "")
+                for part in (
+                    err.get("message"),
+                    err.get("_name"),
+                    err.get("name"),
+                    err.get("contingency"),
+                    json.dumps(err.get("data") or {}, ensure_ascii=False),
+                    json.dumps(err.get("errorData") or {}, ensure_ascii=False),
+                    " ".join(str(x) for x in (err.get("checkpoints") or [])),
+                )
+            ).lower()
+            if any(needle in blob for needle in opaque_needles):
+                return True
+            checkpoints = {str(item) for item in (err.get("checkpoints") or [])}
+            if checkpoints.intersection({"createMemberAccount", "onboardAccount", "signup"}):
+                return True
+        # Unknown non-card errors with empty onboard: still try in-place once path.
+        return not PayPalFlow._is_card_related_signup_error(errors)
+
     def _wait_and_rotate_card(self, reason: str) -> None:
         logger.warning(
             "{}. Waiting before generating a fresh local Visa/MasterCard...",
@@ -6778,6 +6862,23 @@ class PayPalFlow:
                 )
                 continue
 
+            # Opaque empty onboardAccount (e.g. "Cannot destructure property
+            # 'index'...") — keep confirmed phone/OTP session and rotate
+            # email/card instead of full Phase 0 restart.
+            if self._is_opaque_onboard_retryable_signup_error(errors):
+                if attempt >= self.max_card_attempts:
+                    raise RuntimeError(
+                        "Signup failed: no usable access token obtained after "
+                        f"{self.max_card_attempts} in-place signup-info attempts "
+                        "(opaque onboardAccount FAILURE)."
+                    )
+                self._wait_and_rotate_signup_identity(
+                    "Opaque onboardAccount FAILURE without access token "
+                    "(keeping confirmed phone, rotating email/card)",
+                    attempt + 1,
+                )
+                continue
+
             break
 
         content_id = ""
@@ -6791,6 +6892,7 @@ class PayPalFlow:
             f"token_kind={'EC' if self._is_ec_token(token) else 'OTHER'} "
             f"contentIdentifier={content_id or '<missing>'} "
             f"country={getattr(self.address, 'country', '')} "
+            f"otp_confirmed={bool(getattr(self, '_phone_otp_confirmed', False))} "
             f"Last errors: {json.dumps(sanitize_for_log(last_errors), ensure_ascii=False)[:1000]}"
         )
 

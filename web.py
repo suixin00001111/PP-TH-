@@ -1209,14 +1209,15 @@ class WebPayPalFlow(PayPalFlow):
     def _on_full_retry_generated(self, flow_attempt: int):
         self.job.set_status(
             "running",
-            f"整流程重试 {flow_attempt}/{self.max_flow_attempts}，已重新生成资料",
+            f"整流程重试 {flow_attempt}/{self.max_flow_attempts}（会话级，需重新验证手机）",
         )
         self.job.set_generated(public_generated_payload(self.user, self.card, self.address, country=getattr(self.job, 'country', None) or getattr(self.address, 'country', None)))
 
     def _on_signup_retry_generated(self, signup_attempt: int, reason: str):
+        # In-place signup retries keep the already-confirmed phone/OTP session.
         self.job.set_status(
             "running",
-            f"注册换卡重试 {signup_attempt}/{self.max_card_attempts}，已更新账号/卡信息",
+            f"注册换资料重试 {signup_attempt}/{self.max_card_attempts}（保留已验证手机号，不再要验证码）",
         )
         self.job.set_generated(public_generated_payload(self.user, self.card, self.address, country=getattr(self.job, 'country', None) or getattr(self.address, 'country', None)))
 
@@ -1329,6 +1330,7 @@ class WebPayPalFlow(PayPalFlow):
                     self.sms_provider.register_confirmation_result(activation, True)
                 except Exception:
                     pass
+                self._phone_otp_confirmed = True
                 self._publish_smsbower({**pub, "status": "confirmed", "otp_code": code_digits})
                 logger.success("SMSBower auto OTP confirmed")
                 return
@@ -1414,6 +1416,8 @@ class WebPayPalFlow(PayPalFlow):
                         challenge_id,
                         value,
                     ):
+                        self._phone_otp_confirmed = True
+                        self._set_stage("短信验证通过，继续注册（不会再要验证码）")
                         return
                     logger.warning("验证码验证失败。可以继续输入新的6位验证码，或输入新手机号重新发送验证码。")
                     continue
