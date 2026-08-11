@@ -29,7 +29,16 @@ from paypal.flow import PayPalFlow
 from paypal.elevation_flow import IdentityElevationPayPalFlow
 from paypal.models import BillingAddress, CardInfo, UserInfo
 from paypal.oaipy_data import generate_address, generate_card, generate_oaipy_profile, generate_user
-from paypal.proxy import ProxyConfig, build_proxy_config, resolve_working_proxy_entry, resolve_outbound_proxy, get_system_proxy_entry, scrub_process_proxy_env, restore_process_proxy_env
+from paypal.proxy import (
+    ProxyConfig,
+    build_proxy_config,
+    resolve_working_proxy_entry,
+    resolve_outbound_proxy,
+    get_system_proxy_entry,
+    scrub_process_proxy_env,
+    restore_process_proxy_env,
+    split_proxy_inputs,
+)
 from paypal.regions import get_region, normalize_phone, normalize_region, list_regions_public
 from paypal.b_layer_handoff import build_b_layer_evidence, persist_b_layer_evidence
 from paypal.merchant_complete import complete_merchant_chain
@@ -626,6 +635,8 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
     """Probe outbound proxy. Prefer HTTP probe first to surface provider 403 bodies.
 
     proxy_mode=system: do not use application HTTP proxy (for OS TUN / system route).
+    When the user filled one or more custom proxies, only those lines are tested —
+    no silent fallback to Clash 7897 / direct (that mismatch caused “测试可用、任务失败”).
     """
     mode = (proxy_mode or "custom").strip().lower() or "custom"
     raw = (proxy_raw or "").strip()
@@ -660,19 +671,29 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
             "exit_ip": exit_ip,
             "latency_ms": int((_time.time() - started) * 1000),
         }
-    # Empty raw → try system proxy, then direct (VPS). Filled raw → filled first.
+
+    filled_lines = split_proxy_inputs(raw=raw)
+    # Filled custom proxy: stick to the pool only (same contract as run_job).
+    # Empty form: allow system then direct (VPS / desktop TUN probe).
+    allow_system = not bool(filled_lines)
+    allow_direct = not bool(filled_lines)
     saved_env = scrub_process_proxy_env()
     try:
         working, exit_ip, latency_ms, note = resolve_outbound_proxy(
             raw,
-            allow_system_fallback=True,
-            allow_direct_fallback=True,
+            allow_system_fallback=allow_system,
+            allow_direct_fallback=allow_direct,
             timeout=15.0,
         )
     finally:
         restore_process_proxy_env(saved_env)
 
     if working is None or note == "direct":
+        if filled_lines:
+            raise ValueError(
+                "填写的代理均不可用（测试不会回退到本机系统代理/直连）。"
+                "请换节点、加白名单，或一次填写多条（换行）自动切换。"
+            )
         proxy_config = ProxyConfig(
             enabled=False,
             entry=None,
@@ -710,23 +731,27 @@ def test_proxy_connectivity(proxy_raw: str, proxy_mode: str = "custom") -> dict[
         scheme = "direct"
         label = "直连 (direct)"
     else:
-        mode = "custom" if raw else "system"
+        mode = "custom" if filled_lines else "system"
         scheme = getattr(working, "scheme", "") or ""
         label = proxy_config.label
+    pool_n = len(filled_lines)
+    msg_bits = []
+    if exit_ip:
+        msg_bits.append(f"出口 IP {exit_ip}")
+    msg_bits.append(f"路由: {note}")
+    if pool_n > 1:
+        msg_bits.append(f"代理池 {pool_n} 条")
     return {
         "ok": True,
         "mode": mode,
         "proxy_label": label,
         "resolved_scheme": scheme,
         "resolve_note": note,
+        "proxy_pool_size": pool_n,
         "status": status,
         "exit_ip": exit_ip,
         "latency_ms": latency_ms or int((_time.time() - started) * 1000),
-        "message": (
-            f"出口 IP {exit_ip}；路由: {note}"
-            if exit_ip
-            else f"连通；路由: {note}"
-        ),
+        "message": "；".join(msg_bits) if msg_bits else "连通",
     }
 
 
@@ -764,6 +789,7 @@ class WebJob:
     proxy_enabled: bool = False
     proxy_mode: str = "custom"
     proxy_label: str = "代理关闭"
+    proxy_raw: str = ""
     created_at: float = field(default_factory=now_ts)
     updated_at: float = field(default_factory=now_ts)
     started_at: float | None = None
@@ -1473,14 +1499,18 @@ def create_job(
     card_retry_jitter_seconds = max(0.0, min(card_retry_jitter_seconds, 30.0))
     debug = bool(debug) and ALLOW_DEBUG_LOGS
     proxy_raw = (proxy or "").strip()
-    if proxy_raw:
-        # 前端填写的代理优先；解析失败直接报错给用户
+    proxy_lines = split_proxy_inputs(raw=proxy_raw)
+    if proxy_lines:
+        # 前端填写的代理优先（支持多行池）；解析失败直接报错给用户
         proxy_config = build_proxy_config(enabled=True, raw=proxy_raw)
+        proxy_raw_stored = "\n".join(proxy_lines)
     elif proxy_enabled:
         # 兼容旧开关：未填串时回退到服务端配置池
         proxy_config = build_proxy_config(enabled=True)
+        proxy_raw_stored = ""
     else:
         proxy_config = build_proxy_config(enabled=False)
+        proxy_raw_stored = ""
 
     job = WebJob(
         id=uuid.uuid4().hex[:12],
@@ -1514,6 +1544,7 @@ def create_job(
         proxy_enabled=proxy_config.enabled,
         proxy_mode="custom",
         proxy_label=proxy_config.label,
+        proxy_raw=proxy_raw_stored,
         _proxy_config=proxy_config,
     )
     with JOBS_LOCK:
@@ -1556,19 +1587,24 @@ def run_job(job: WebJob) -> None:
                 roxy_workspace_id=getattr(job, "roxy_workspace_id", ""),
                 roxy_project_id=getattr(job, "roxy_project_id", ""),
             )
-            job.set_status("running", "生成用户、卡片和地址")
+            job.set_status("running", "解析出网代理")
             proxy_config = job._proxy_config or build_proxy_config(enabled=job.proxy_enabled)
             saved_proxy_env = scrub_process_proxy_env()
             try:
-                filled_raw = ""
-                if proxy_config.enabled and proxy_config.entry:
+                # Prefer multi-line raw stored on the job (user pool). Fall back to
+                # single entry URL for older jobs / server pool path.
+                filled_raw = (getattr(job, "proxy_raw", "") or "").strip()
+                if not filled_raw and proxy_config.enabled and proxy_config.entry:
                     filled_raw = proxy_config.entry.url or ""
-                # Filled residential first; if provider bans current public IP,
-                # automatically use Windows 系统代理 (e.g. 127.0.0.1:7897).
+                filled_lines = split_proxy_inputs(raw=filled_raw)
+                # Explicit filled pool: do NOT fall back to half-dead Clash 7897 /
+                # direct. That was the "测试可用、任务失败" gap (test used system,
+                # job re-probed and died, or vice versa).
+                require_filled = bool(filled_lines) or bool(job.proxy_enabled)
                 working, exit_ip, latency_ms, note = resolve_outbound_proxy(
                     filled_raw,
-                    allow_system_fallback=True,
-                    allow_direct_fallback=True,
+                    allow_system_fallback=not require_filled,
+                    allow_direct_fallback=not require_filled,
                     timeout=15.0,
                 )
                 original_scheme = (
@@ -1576,6 +1612,11 @@ def run_job(job: WebJob) -> None:
                 )
                 # working is None => direct public egress (common on clean VPS)
                 if working is None or note == "direct":
+                    if require_filled:
+                        raise ValueError(
+                            "已启用/填写代理，但全部节点 HTTPS 出网失败；"
+                            "不会回退本机系统代理或直连。请换节点或一次填多条代理。"
+                        )
                     proxy_config = ProxyConfig(
                         enabled=False,
                         entry=None,
@@ -1594,17 +1635,18 @@ def run_job(job: WebJob) -> None:
                         resolved_from=note,
                     )
                     logger.info(
-                        "Proxy resolved for job: {} exit_ip={} latency={}ms note={} filled_scheme={}",
+                        "Proxy resolved for job: {} exit_ip={} latency={}ms note={} pool={} filled_scheme={}",
                         proxy_config.label,
                         exit_ip or "",
                         latency_ms,
                         note,
+                        len(filled_lines) or 1,
                         original_scheme,
                     )
                     if "system-fallback" in note or note.startswith("system"):
                         logger.warning(
                             "Using system/local proxy path ({}). "
-                            "Filled cliproxy was skipped or blocked for this network.",
+                            "No filled residential proxy was provided.",
                             note,
                         )
                 job._proxy_config = proxy_config
@@ -1613,6 +1655,7 @@ def run_job(job: WebJob) -> None:
                 raise
             job.proxy_enabled = proxy_config.enabled
             job.proxy_label = proxy_config.label
+            job.set_status("running", "生成用户、卡片和地址")
             profile = generate_oaipy_profile(phone=job.phone, country=job.country)
             user = profile["user"]
             card = profile["card"]

@@ -338,7 +338,22 @@ function syncSmsbowerUi() {
 }
 
 
-function normalizeProxyInput(raw) {
+function splitProxyLines(raw) {
+  const text = String(raw || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const out = [];
+  const seen = new Set();
+  for (const chunk of text.replace(/;/g, "\n").replace(/\|/g, "\n").split("\n")) {
+    const line = chunk.trim();
+    if (!line || line.startsWith("#")) continue;
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out;
+}
+
+function normalizeProxyLine(raw) {
   let value = String(raw || "").trim();
   if (!value) return "";
   if (/^(https?|socks5h?):\/\//i.test(value)) return value;
@@ -364,6 +379,21 @@ function normalizeProxyInput(raw) {
   return "http://" + value;
 }
 
+/** Normalize multi-line proxy pool; keep one proxy per line for the API. */
+function normalizeProxyInput(raw) {
+  const lines = splitProxyLines(raw).map(normalizeProxyLine).filter(Boolean);
+  // de-dupe again after scheme rewrite
+  const out = [];
+  const seen = new Set();
+  for (const line of lines) {
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
 function getProxyForRequest() {
   if (!$("#proxyEnabled")?.checked) return "";
   return normalizeProxyInput($("#proxyRaw")?.value || "");
@@ -386,10 +416,11 @@ async function testProxy() {
     return;
   }
   const proxy = normalizeProxyInput(raw);
+  const poolSize = splitProxyLines(proxy).length;
   if ($("#proxyRaw") && proxy) $("#proxyRaw").value = proxy;
   saveProxyPrefs();
   if (btn) btn.disabled = true;
-  setProxyTestResult("测试中…", "pending");
+  setProxyTestResult(poolSize > 1 ? `测试中（${poolSize} 条）…` : "测试中…", "pending");
   try {
     const data = await api("/api/proxy/test", {
       method: "POST",
@@ -400,7 +431,11 @@ async function testProxy() {
     } else {
       const ip = data.exit_ip ? ` · IP ${data.exit_ip}` : "";
       const ms = data.latency_ms != null ? ` · ${data.latency_ms}ms` : "";
-      setProxyTestResult(`可用${ip}${ms}`, "ok");
+      const note = data.resolve_note ? ` · ${data.resolve_note}` : "";
+      const pool = (data.proxy_pool_size || poolSize) > 1
+        ? ` · 池 ${data.proxy_pool_size || poolSize} 条`
+        : "";
+      setProxyTestResult(`可用${ip}${ms}${pool}${note}`, "ok");
     }
   } catch (err) {
     setProxyTestResult(`失败：${err.message}`, "bad");
@@ -967,10 +1002,7 @@ function bind() {
     proxyEnabled.addEventListener("change", () => {
       syncProxyPanel();
       saveProxyPrefs();
-    saveRuntimePrefs();
-    try {
-      if ($('#smsbowerEnabled')) localStorage.setItem(SMSBOWER_ON_KEY, $('#smsbowerEnabled').checked ? '1' : '0');
-    } catch (e) {}
+      saveRuntimePrefs();
     });
   }
   const proxyRaw = $("#proxyRaw");
@@ -979,10 +1011,7 @@ function bind() {
       const v = proxyRaw.value.trim();
       if (v) proxyRaw.value = normalizeProxyInput(v);
       saveProxyPrefs();
-    saveRuntimePrefs();
-    try {
-      if ($('#smsbowerEnabled')) localStorage.setItem(SMSBOWER_ON_KEY, $('#smsbowerEnabled').checked ? '1' : '0');
-    } catch (e) {}
+      saveRuntimePrefs();
     });
   }
   const countrySel = $("#countrySelect");

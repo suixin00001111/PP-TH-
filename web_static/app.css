@@ -380,7 +380,8 @@ label {
   letter-spacing: 0.03em;
 }
 
-input {
+input,
+textarea {
   width: 100%;
   border: 1px solid var(--line);
   background: var(--input-bg);
@@ -393,12 +394,23 @@ input {
   transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
 }
 
-input:focus {
+textarea {
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+input:focus,
+textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-input::placeholder { color: color-mix(in srgb, var(--muted) 75%, transparent); }
+input::placeholder,
+textarea::placeholder { color: color-mix(in srgb, var(--muted) 75%, transparent); }
 
 .form-row {
   display: grid;

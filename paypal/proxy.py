@@ -637,25 +637,37 @@ def probe_direct_exit(*, timeout: float = 12.0) -> tuple[str, int]:
 def resolve_outbound_proxy(
     filled_raw: str | None = None,
     *,
+    filled_pool: Iterable[str] | None = None,
     allow_system_fallback: bool = True,
     allow_direct_fallback: bool = True,
     timeout: float = 12.0,
 ) -> tuple[ProxyEntry | None, str, int, str]:
-    """Resolve outbound proxy (filled proxy wins when provided).
+    """Resolve outbound proxy (filled proxies win when provided).
 
     Strategy:
-      - User-filled residential/custom proxy is tried FIRST.
-      - Local/system proxies are tried next (every open candidate, not just first).
+      - User-filled residential/custom proxies are tried FIRST (multi-line pool,
+        in order; first working entry wins, with multi-scheme auto-upgrade).
+      - Local/system proxies are tried next only when allowed and nothing was
+        filled, or when filled lines all fail *and* system fallback is on
+        **and** the caller did not require a filled proxy (empty form).
       - If nothing was filled and proxies fail, fall back to **direct** when the
         server/machine can reach the public internet (Linux VPS common case).
+
+    When the user filled one or more proxies, system/direct fallback is **off by
+    default intent**: ``allow_*`` still apply, but direct only runs with an empty
+    form. System fallback still runs after filled failures so a half-broken
+    residential line can fall back to a working local client — callers that must
+    stick to the filled pool should pass ``allow_system_fallback=False``.
 
     Returns (entry|None, exit_ip, latency_ms, note).
     entry is None means direct (no application-level proxy).
     """
-    filled_raw = (filled_raw or "").strip()
+    filled_lines = split_proxy_inputs(raw=filled_raw, pool=filled_pool)
     notes: list[str] = []
-    filled_entry: ProxyEntry | None = None
     system_entries = list_system_proxy_entries() if allow_system_fallback else []
+    filled_entries, parse_notes = parse_proxy_candidates(pool=filled_lines)
+    notes.extend(parse_notes)
+    has_filled = bool(filled_lines)
 
     def _try_entry(entry: ProxyEntry, tag: str) -> tuple[ProxyEntry, str, int, str] | None:
         try:
@@ -673,31 +685,29 @@ def resolve_outbound_proxy(
             notes.append(f"{tag}: {exc}")
             return None
 
-    # 1) User-filled residential / custom first
-    if filled_raw:
-        try:
-            filled_entry = ProxyEntry.parse(filled_raw)
-        except Exception as exc:
-            notes.append(f"parse-filled: {exc}")
-            filled_entry = None
-        if filled_entry is not None:
-            hit = _try_entry(filled_entry, "filled")
-            if hit:
-                working, exit_ip, latency_ms, tag = hit
-                if working.scheme != filled_entry.scheme:
-                    tag = f"filled-auto-{working.scheme}"
-                return working, exit_ip, latency_ms, tag
-
-    # 2) System / local proxy fallback — try ALL candidates (10809 may be dead
-    # while 10808 socks works, or vice versa)
-    for system_entry in system_entries:
-        hit = _try_entry(system_entry, f"system-fallback:{system_entry.label}")
+    # 1) User-filled residential / custom pool first (ordered failover)
+    for idx, filled_entry in enumerate(filled_entries, start=1):
+        tag = f"filled#{idx}" if len(filled_entries) > 1 else "filled"
+        hit = _try_entry(filled_entry, tag)
         if hit:
-            return hit
+            working, exit_ip, latency_ms, used_tag = hit
+            if working.scheme != filled_entry.scheme:
+                used_tag = f"{used_tag}-auto-{working.scheme}"
+            if len(filled_entries) > 1:
+                used_tag = f"{used_tag}/{len(filled_entries)}"
+            return working, exit_ip, latency_ms, used_tag
 
-    # 3) Direct fallback when user did not require a specific proxy
-    # (empty form on a VPS that already has clean public egress).
-    if allow_direct_fallback and not filled_raw:
+    # 2) System / local proxy fallback (only when allowed).
+    # Job path with an explicit filled proxy should pass allow_system_fallback=False
+    # so a green "test" cannot silently mean Clash 7897 while the residential line is dead.
+    if allow_system_fallback:
+        for system_entry in system_entries:
+            hit = _try_entry(system_entry, f"system-fallback:{system_entry.label}")
+            if hit:
+                return hit
+
+    # 3) Direct fallback only when user did not fill a proxy
+    if allow_direct_fallback and not has_filled:
         try:
             exit_ip, latency_ms = probe_direct_exit(timeout=timeout)
             return None, exit_ip, latency_ms, "direct"
@@ -705,35 +715,39 @@ def resolve_outbound_proxy(
             notes.append(f"direct: {exc}")
 
     # Compose actionable error (Chinese)
-    system_entry = system_entries[0] if system_entries else None
     parts = [
-        "出网探测失败（已尝试：系统代理/填写代理"
-        + ("/直连" if allow_direct_fallback and not filled_raw else "")
+        "出网探测失败（已尝试："
+        + ("填写代理池/" if has_filled else "")
+        + ("系统代理/" if allow_system_fallback else "")
+        + ("直连" if allow_direct_fallback and not has_filled else "填写代理")
         + "）。",
     ]
-    if filled_raw:
+    if has_filled:
         parts.append(
-            "填写的住宅代理：当前公网 IP 常被 cliproxy 拒绝（forbidden ip not supported）；"
-            "关 TUN 直连节点会被拒，这与 socks5/http 写法无关。"
+            f"已填写 {len(filled_lines)} 条代理，均未能完成 HTTPS 出网。"
+            "常见原因：cliproxy 拒绝当前公网 IP（forbidden ip not supported）、"
+            "节点失效、账号密码错误、或协议需 socks5h。"
+            "可换一条住宅节点，或把本机公网 IP 加白名单后再测。"
         )
-    if system_entries:
+    if system_entries and allow_system_fallback:
         labels = ", ".join(e.label for e in system_entries[:4])
         parts.append(
             f"系统/本地代理已检测到 [{labels}]，但当前无法完成 HTTPS 出网"
             "（常见：只开了系统代理开关、未开 TUN，或本地桥接端口是残留死连接）。"
             "若本机其它程序能上网，请确认已开 TUN/虚拟网卡，使流量在系统层出网。"
         )
-    else:
+    elif allow_system_fallback and not system_entries and not has_filled:
         parts.append("未检测到本地系统代理（Clash 系统代理未开或端口未监听）。")
     parts.append(
         "可行处理：1) 打开客户端 TUN/虚拟网卡后再跑（可清空代理框）；"
         "2) 或在代理商后台把本机公网 IP 加白名单后关 TUN 用填写代理；"
         "3) 系统代理模式需客户端本身已能浏览器正常上网；"
-        "4) 服务器直连可用时，请清空代理框并关闭「强制系统代理」。"
+        "4) 可一次填写多条代理（换行分隔），系统会按顺序自动切换可用节点；"
+        "5) 服务器直连可用时，请清空代理框。"
     )
-    detail = " | ".join(notes[-4:])
+    detail = " | ".join(notes[-6:])
     if detail:
-        parts.append(f"技术详情: {detail[:450]}")
+        parts.append(f"技术详情: {detail[:500]}")
     raise ValueError("".join(parts))
 
 
@@ -775,6 +789,7 @@ def parse_bool(value: object, default: bool = False) -> bool:
 
 
 def _split_pool(raw: str) -> list[str]:
+    """Split env pool text (newline / ; / ,)."""
     text = (raw or "").strip()
     if not text:
         return []
@@ -784,6 +799,57 @@ def _split_pool(raw: str) -> list[str]:
         if item:
             parts.append(item)
     return parts
+
+
+def split_proxy_inputs(raw: str | None = None, pool: Iterable[str] | None = None) -> list[str]:
+    """Normalize user-filled multi-proxy text into ordered unique lines.
+
+    Separators: newline, ``;``, ``|``. Commas are **not** treated as separators
+    (passwords / CSV-ish provider strings may contain ``,``).
+    """
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def _add(item: str) -> None:
+        value = (item or "").strip()
+        if not value or value.startswith("#"):
+            return
+        key = value.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        ordered.append(value)
+
+    if pool is not None:
+        for item in pool:
+            _add(str(item))
+    text = (raw or "").strip()
+    if text:
+        normalized = (
+            text.replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .replace(";", "\n")
+            .replace("|", "\n")
+        )
+        for chunk in normalized.split("\n"):
+            _add(chunk)
+    return ordered
+
+
+def parse_proxy_candidates(
+    raw: str | None = None,
+    pool: Iterable[str] | None = None,
+) -> tuple[list[ProxyEntry], list[str]]:
+    """Parse multi-line proxy input into ProxyEntry list + parse error notes."""
+    lines = split_proxy_inputs(raw=raw, pool=pool)
+    entries: list[ProxyEntry] = []
+    notes: list[str] = []
+    for idx, line in enumerate(lines, start=1):
+        try:
+            entries.append(ProxyEntry.parse(line))
+        except Exception as exc:
+            notes.append(f"parse#{idx}: {exc}")
+    return entries, notes
 
 
 def _read_windows_system_proxy() -> str | None:
@@ -890,8 +956,9 @@ def build_proxy_config(
 
     enabled=None means use config/env default.  If explicitly disabled, no proxy
     is selected — even when a custom proxy string is provided.
-    raw / proxy_url: optional user-provided proxy string. When enabled is None,
-    providing a custom proxy implicitly enables it; otherwise the pool is used.
+    raw / proxy_url: optional user-provided proxy string (single or multi-line).
+    When multiple lines are provided, the first **parseable** line is stored as
+    the primary entry; full failover probing happens in ``resolve_outbound_proxy``.
     """
     custom_proxy = (raw or proxy_url or "").strip()
     if enabled is None:
@@ -905,5 +972,16 @@ def build_proxy_config(
     if not should_enable:
         return ProxyConfig(enabled=False)
     if custom_proxy:
-        return ProxyConfig(enabled=True, entry=ProxyEntry.parse(custom_proxy))
+        lines = split_proxy_inputs(raw=custom_proxy)
+        if not lines:
+            raise ValueError("proxy config is empty")
+        # Prefer first parseable line; keep raw multi-line on caller side for resolve.
+        last_err: Exception | None = None
+        for line in lines:
+            try:
+                return ProxyConfig(enabled=True, entry=ProxyEntry.parse(line))
+            except Exception as exc:
+                last_err = exc
+                continue
+        raise ValueError(str(last_err) if last_err else "unsupported proxy format")
     return ProxyConfig(enabled=True, entry=choose_proxy_entry(index=index))

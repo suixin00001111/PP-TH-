@@ -9,14 +9,16 @@
 
 ## 1. 设计目标
 
-1. **优先使用你在 Web 填写的代理**（主机 / 端口 / 账号 / 密码不变）。
+1. **优先使用你在 Web 填写的代理**（主机 / 端口 / 账号 / 密码不变）；**支持一次填多条**（换行 / `;` / `|`），按顺序故障切换。
 2. **不依赖 TUN 才能识别填写的代理**：对住宅节点自动尝试 `socks5h` / `socks5` / `http`。
-3. 若 Windows「系统代理」已开（如 Clash `127.0.0.1:7897`），在**填写代理不可用且允许回退**时可走本地客户端出口。
-4. **未填代理且未强制 require_proxy** → **直连**，不要因为半残 7897 导致整任务起不来。
+3. **填写了代理时，「测试」与「任务」只认填写池**，不会静默改用本机 Clash `7897` 或直连（避免「测试绿、任务挂」）。
+4. 仅当**未填代理**时：可回退系统代理，再不行则 **直连**（VPS 常见）。
 5. **明确失败原因**：cliproxy `forbidden ip=x.x.x.x not supported` 会中文提示，而不是只报 curl 97/28。
 6. 探测与会话使用 `ssl_env` 镜像 CA，减少 Windows 中文路径 **curl 77**。
 
 ## 2. 支持的填写格式
+
+单条：
 
 ```text
 host:port:username:password
@@ -26,6 +28,17 @@ socks5://user:pass@host:port
 socks5h://user:pass@host:port
 host:port
 ```
+
+多条（代理池，按顺序试到第一条可用）：
+
+```text
+user1:pass1@host1:port1
+user2:pass2@host2:port2
+socks5h://user3:pass3@host3:port3
+```
+
+也可用分号或竖线：`a@h:1;b@h:2` / `a@h:1|b@h:2`。  
+**逗号不作为分隔符**（密码里可能有 `,`）。
 
 - 无 scheme 时按 `http://` 解析（住宅节点往往会再自动升到 `socks5h`）。
 - **不要**写成 `http://host:port:user:pass`。
@@ -37,17 +50,18 @@ host:port
 
 | 顺序 | 条件 | 行为 |
 |------|------|------|
-| 1 | Web/CLI **填写了**代理 | 对**同一 host/user/pass** 尝试 `socks5h` → `socks5` → `http` → `https` |
-| 2 | 填写失败或未填，且允许系统回退 | 探测本机客户端（如 `127.0.0.1:7897`） |
-| 3 | `require_proxy=False` 仍无可用出口 | **`direct`**，任务继续走机器默认路由 |
-| 4 | `require_proxy=True`（用户填了代理却全失败） | 抛出可操作的中文错误 |
+| 1 | Web/CLI **填写了**代理（可多行） | 按顺序探测池内节点；每条对同一 host/user/pass 尝试 `socks5h` → `socks5` → `http` → `https` |
+| 2 | **未填** 且允许系统回退 | 探测本机客户端（如 `127.0.0.1:7897`） |
+| 3 | **未填** 且仍无可用出口 | **`direct`**，任务继续走机器默认路由 |
+| 4 | **已填** 但池内全部失败 | 抛出中文错误（**不**回退 7897/直连） |
 
-`require_proxy` 在 Web 任务线程中大致为：`bool(填写的代理原文)`（空表单 + 关代理不得因 7897 挂死）。
+Web 任务 / 「测试代理」在填写非空时：`allow_system_fallback=False`、`allow_direct_fallback=False`。  
+空表单才允许系统/直连。
 
 成功后任务日志会出现类似：
 
 ```text
-Proxy resolved for job: socks5h://user:***@us.cliproxy.io:3010 exit_ip=213.x.x.x note=filled-auto-socks5h
+Proxy resolved for job: socks5h://user:***@us.cliproxy.io:3010 exit_ip=213.x.x.x note=filled#2/3 pool=3
 HTTP outbound proxy: socks5h://user:***@us.cliproxy.io:3010
 ```
 
@@ -106,7 +120,10 @@ Chromium **不支持带用户名密码的 SOCKS5**。
 
 `POST /api/proxy/test` 与任务使用同一套 `resolve_outbound_proxy`。
 
-成功返回字段包括：`exit_ip`、`resolved_scheme`、`resolve_note`、`latency_ms`。
+- 填写了节点 → **只测填写池**；全部失败则报错（不会用本机 7897 冒充成功）。
+- 多条时返回 `proxy_pool_size`、`resolve_note`（如 `filled#2/3`）。
+
+成功返回字段包括：`exit_ip`、`resolved_scheme`、`resolve_note`、`proxy_pool_size`、`latency_ms`。
 
 ## 8. 推荐用法
 
