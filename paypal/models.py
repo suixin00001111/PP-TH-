@@ -19,6 +19,9 @@ class UserInfo:
     dob: str  # DD/MM/YYYY
     national_id: str = ""
     cpf: str = ""  # used for BR identity document
+    identity_document_type: str = ""
+    identity_document_number: str = ""
+    nationality: str = ""
 
 
 @dataclass

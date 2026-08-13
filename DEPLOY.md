@@ -1,9 +1,10 @@
 # 服务器部署说明（PP-TH-）
 
-更新：2026-08-10  
+更新：2026-08-12  
 
 目标：把本仓库 **Web 控制台** 部署到 VPS；用户自行填写 BA / 手机号 / **自己的代理**。  
-**服务器不预置住宅代理池**（`PAYPAL_PROXY_ENABLED=0`，无共享 `PAYPAL_PROXY_URL`）。
+**服务器不预置住宅代理池**（`PAYPAL_PROXY_ENABLED=0`，无共享 `PAYPAL_PROXY_URL`）。  
+资料：**地址默认在线 OSM**；姓名/证件本地生成。Buyer：`legacy` | `elevate_bind`。
 
 仓库：https://github.com/suixin00001111/PP-TH-
 
@@ -132,7 +133,7 @@ curl -s http://127.0.0.1:8080/api/health
 
 - 有 `buyer_identity_modes`
 - `fingerprint_sources` 为多值（含 headless/roxy），**不是**旧版「仅 random 锁定」
-- UI 有 Buyer 模式下拉；可选在线地址由服务端生成
+- UI 有 Buyer 模式下拉；**地址默认在线 OSM** 由服务端生成（失败回退本地池）；其它 PII 本地生成
 
 ---
 
@@ -182,7 +183,8 @@ server {
 | 仍是很旧的 UI | `git pull` + `bash deploy/install.sh`；清浏览器缓存 |
 | 选了 Headless 报缺 playwright | 装 headless 依赖，或改回纯协议三项 |
 | 任务代理失败 | 用户自测代理；见 [PROXY.md](./PROXY.md) |
-| 升权相关报错 | 确认传了 `elevate_bind`；假 BA 只能测到 Phase2 |
+| 升权相关报错 | 确认传了 `elevate_bind`；假/死 BA 只能测到 Phase2；Live 升权需新 BA + OTP |
+| 想关在线地址 | 环境变量 `PAYPAL_ONLINE_ADDRESS=0` 后重启 web |
 
 ---
 

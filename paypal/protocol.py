@@ -139,24 +139,37 @@ def build_protocol(country: str | None) -> ProtocolContext:
 
 
 def format_billing_line1(style: str, street: str, house_number: str, district: str = "") -> str:
-    """Country-shaped address line1."""
+    """Country-shaped address line1.
+
+    TH/ID/PH/TW/AE postcode-autocomplete returns ``<house> <street>``.  Match
+    that order so ANS-selected billingAddress.line1 is bit-identical to what
+    PayPal already normalized (see paypal-agreement-protocol-main).
+    """
     street = (street or "").strip()
     house = (house_number or "").strip()
     district = (district or "").strip()
     if style == "jp":
         return f"{street} {house}".strip()
-    if style == "us" or style == "uk":
-        return f"{house} {street}".strip()
+    if style in {"us", "uk", "th"}:
+        # House-first: US/UK/TH (and markets using the same ANS shape).
+        if house and street:
+            if street.startswith(house) or house in street.split()[:1]:
+                return street
+            return f"{house} {street}".strip()
+        return (street or house).strip()
     if style == "eu":
         return f"{street} {house}".strip()
-    if style in {"br", "latam", "th"}:
+    if style in {"br", "latam"}:
+        return f"{street}, {house}".strip() if house else street
+    if house and street:
         return f"{street}, {house}".strip()
-    return f"{street}, {house}".strip()
+    return (street or house).strip()
 
 
 def format_billing_line2(style: str, district: str) -> str:
     district = (district or "").strip()
-    if style in {"us", "uk"}:
+    # Reference keeps line2 empty for GB/US/JP/AU/CA/NL/DE; TH keeps district.
+    if style in {"us", "uk", "jp"}:
         return ""
     return district
 

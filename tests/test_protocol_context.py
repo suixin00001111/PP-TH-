@@ -21,9 +21,10 @@ class ProtocolContextTests(unittest.TestCase):
         self.assertFalse(jp.send_identity_document)
 
     def test_address_styles_differ(self):
+        # TH line1 is house-first (matches PayPal ANS / reference protocol).
         th = format_billing_line1("th", "Sukhumvit Road", "12")
         us = format_billing_line1("us", "Main Street", "12")
-        self.assertEqual(th, "Sukhumvit Road, 12")
+        self.assertEqual(th, "12 Sukhumvit Road")
         self.assertEqual(us, "12 Main Street")
         self.assertEqual(format_billing_line2("us", "Downtown"), "")
         self.assertEqual(format_billing_line2("th", "Watthana"), "Watthana")

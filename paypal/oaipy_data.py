@@ -220,6 +220,63 @@ def generate_cpf() -> str:
     return "".join(str(n) for n in nums)
 
 
+def generate_thai_national_id() -> str:
+    """Checksum-valid 13-digit Thai national ID (Weasley NATIONAL_ID for TH)."""
+    digits = [random.randint(1, 8)] + [random.randint(0, 9) for _ in range(11)]
+    weighted_sum = sum(value * weight for value, weight in zip(digits, range(13, 1, -1)))
+    check_digit = (11 - (weighted_sum % 11)) % 10
+    return "".join(str(value) for value in digits) + str(check_digit)
+
+
+def generate_indonesia_nik(dob: str = "", *, female: bool = False) -> str:
+    """Structurally consistent 16-digit Indonesian NIK."""
+    parts = str(dob or "").split("/")
+    day = int(parts[0]) if len(parts) == 3 and parts[0].isdigit() else random.randint(1, 28)
+    month = int(parts[1]) if len(parts) == 3 and parts[1].isdigit() else random.randint(1, 12)
+    year = int(parts[2]) if len(parts) == 3 and parts[2].isdigit() else random.randint(1980, 2000)
+    encoded_day = day + 40 if female else day
+    district_code = random.choice(("317301", "317302", "317305", "347101", "517101"))
+    return f"{district_code}{encoded_day:02d}{month:02d}{year % 100:02d}{random.randint(1, 9999):04d}"
+
+
+def generate_philippines_national_id() -> str:
+    """16-digit PhilSys-style National ID number."""
+    return "".join(str(random.randint(0, 9)) for _ in range(16))
+
+
+def generate_taiwan_national_id() -> str:
+    """Checksum-valid Taiwan national identification number."""
+    letter_codes = {
+        "A": 10, "B": 11, "C": 12, "D": 13, "E": 14, "F": 15, "G": 16,
+        "H": 17, "I": 34, "J": 18, "K": 19, "L": 20, "M": 21, "N": 22,
+        "O": 35, "P": 23, "Q": 24, "R": 25, "S": 26, "T": 27, "U": 28,
+        "V": 29, "W": 32, "X": 30, "Y": 31, "Z": 33,
+    }
+    letter = random.choice(tuple(letter_codes))
+    body = [random.choice((1, 2))] + [random.randint(0, 9) for _ in range(7)]
+    code = letter_codes[letter]
+    total = code // 10 + (code % 10) * 9
+    total += sum(value * weight for value, weight in zip(body, range(8, 0, -1)))
+    check = (-total) % 10
+    return letter + "".join(str(value) for value in body) + str(check)
+
+
+def generate_uae_emirates_id(dob: str = "") -> str:
+    """Structurally consistent 15-digit Emirates ID-style number."""
+    parts = str(dob or "").split("/")
+    year = int(parts[2]) if len(parts) == 3 and parts[2].isdigit() else random.randint(1980, 2000)
+    base = "784" + f"{year:04d}" + f"{random.randint(0, 9_999_999):07d}"
+    total = 0
+    for index, char in enumerate(reversed(base)):
+        value = int(char)
+        if index % 2 == 0:
+            value *= 2
+            if value > 9:
+                value -= 9
+        total += value
+    return base + str((-total) % 10)
+
+
 @lru_cache(maxsize=64)
 def _faker_for_locale(locale: str) -> Faker:
     tried = [locale] + FAKER_FALLBACKS.get(locale, []) + ["en_US"]
@@ -657,11 +714,37 @@ def generate_user(phone: str = "", country: str = DEFAULT_REGION) -> UserInfo:
     first, last = _latin_name(fake, country=code)
     e164, local, cc = normalize_phone(code, phone)
     region = get_region(code)
+    dob = generate_dob()
     cpf = ""
     national_id = ""
+    identity_document_type = ""
+    identity_document_number = ""
+    nationality = ""
     if region.send_identity_document and region.identity_type == "CPF":
         cpf = generate_cpf()
         national_id = cpf
+        identity_document_type = "CPF"
+        identity_document_number = cpf
+        nationality = code
+    elif region.send_identity_document and (region.identity_type or "").upper() == "NATIONAL_ID":
+        identity_document_type = "NATIONAL_ID"
+        nationality = code
+        if code == "TH":
+            identity_document_number = generate_thai_national_id()
+        elif code == "ID":
+            female = first.lower() in {
+                "siti", "ayu", "dewi", "putri", "rina", "nadia", "intan", "maya",
+            }
+            identity_document_number = generate_indonesia_nik(dob, female=female)
+        elif code == "PH":
+            identity_document_number = generate_philippines_national_id()
+        elif code == "TW":
+            identity_document_number = generate_taiwan_national_id()
+        elif code == "AE":
+            identity_document_number = generate_uae_emirates_id(dob)
+        else:
+            identity_document_number = "".join(str(random.randint(0, 9)) for _ in range(13))
+        national_id = identity_document_number
     return UserInfo(
         first_name=first,
         last_name=last,
@@ -670,9 +753,12 @@ def generate_user(phone: str = "", country: str = DEFAULT_REGION) -> UserInfo:
         phone_local=local,
         phone_country_code=cc,
         password=generate_password(),
-        dob=generate_dob(),
+        dob=dob,
         national_id=national_id,
         cpf=cpf,
+        identity_document_type=identity_document_type,
+        identity_document_number=identity_document_number,
+        nationality=nationality,
     )
 
 

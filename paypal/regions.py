@@ -82,7 +82,13 @@ def _row(
 
 # name_zh stored as unicode escapes so Windows editors cannot corrupt them
 REGIONS: dict[str, RegionProfile] = {
-    "TH": _row("TH", "\u6cf0\u56fd", "Thailand", "th", "th-TH", "th_TH", "66", -420, "812345678"),
+    # TH/ID/PH/TW/AE Weasley forms require National ID + nationality (see
+    # paypal-agreement-protocol-main _build_signup_variables). Missing these
+    # fields produces opaque onboardAccount FAILURE ("Cannot destructure...").
+    "TH": _row(
+        "TH", "\u6cf0\u56fd", "Thailand", "th", "th-TH", "th_TH", "66", -420, "812345678",
+        require_identity=True, identity_type="NATIONAL_ID", send_identity_document=True,
+    ),
     "JP": _row("JP", "\u65e5\u672c", "Japan", "ja", "ja-JP", "ja_JP", "81", -540, "9012345678"),
     "US": _row("US", "\u7f8e\u56fd", "United States", "en", "en-US", "en_US", "1", 300, "4155552671"),
     "GB": _row("GB", "\u82f1\u56fd", "United Kingdom", "en", "en-GB", "en_GB", "44", 0, "7400123456"),
@@ -91,14 +97,23 @@ REGIONS: dict[str, RegionProfile] = {
         require_identity=True, identity_type="CPF", send_identity_document=True,
     ),
     "MX": _row("MX", "\u58a8\u897f\u54e5", "Mexico", "es", "es-MX", "es_MX", "52", 360, "5512345678"),
-    "ID": _row("ID", "\u5370\u5ea6\u5c3c\u897f\u4e9a", "Indonesia", "id", "id-ID", "id_ID", "62", -420, "81234567890"),
+    "ID": _row(
+        "ID", "\u5370\u5ea6\u5c3c\u897f\u4e9a", "Indonesia", "id", "id-ID", "id_ID", "62", -420, "81234567890",
+        require_identity=True, identity_type="NATIONAL_ID", send_identity_document=True,
+    ),
     "MY": _row("MY", "\u9a6c\u6765\u897f\u4e9a", "Malaysia", "ms", "ms-MY", "ms_MY", "60", -480, "123456789"),
     "SG": _row("SG", "\u65b0\u52a0\u5761", "Singapore", "en", "en-SG", "en_SG", "65", -480, "91234567"),
-    "PH": _row("PH", "\u83f2\u5f8b\u5bbe", "Philippines", "en", "en-PH", "en_PH", "63", -480, "9171234567"),
+    "PH": _row(
+        "PH", "\u83f2\u5f8b\u5bbe", "Philippines", "en", "en-PH", "en_PH", "63", -480, "9171234567",
+        require_identity=True, identity_type="NATIONAL_ID", send_identity_document=True,
+    ),
     "VN": _row("VN", "\u8d8a\u5357", "Vietnam", "vi", "vi-VN", "vi_VN", "84", -420, "912345678"),
     "KR": _row("KR", "\u97e9\u56fd", "South Korea", "ko", "ko-KR", "ko_KR", "82", -540, "1012345678"),
     "HK": _row("HK", "\u9999\u6e2f", "Hong Kong", "zh", "zh-HK", "zh_HK", "852", -480, "51234567"),
-    "TW": _row("TW", "\u53f0\u6e7e", "Taiwan", "zh", "zh-TW", "zh_TW", "886", -480, "912345678"),
+    "TW": _row(
+        "TW", "\u53f0\u6e7e", "Taiwan", "zh", "zh-TW", "zh_TW", "886", -480, "912345678",
+        require_identity=True, identity_type="NATIONAL_ID", send_identity_document=True,
+    ),
     "CN": _row("CN", "\u4e2d\u56fd", "China", "zh", "zh-CN", "zh_CN", "86", -480, "13800138000"),
     "AU": _row("AU", "\u6fb3\u5927\u5229\u4e9a", "Australia", "en", "en-AU", "en_AU", "61", -600, "412345678"),
     "NZ": _row("NZ", "\u65b0\u897f\u5170", "New Zealand", "en", "en-NZ", "en_NZ", "64", -720, "211234567"),
@@ -119,7 +134,10 @@ REGIONS: dict[str, RegionProfile] = {
     "NO": _row("NO", "\u632a\u5a01", "Norway", "nb", "nb-NO", "nb_NO", "47", -60, "40612345"),
     "FI": _row("FI", "\u82ac\u5170", "Finland", "fi", "fi-FI", "fi_FI", "358", -120, "401234567"),
     "IN": _row("IN", "\u5370\u5ea6", "India", "en", "en-IN", "en_IN", "91", -330, "9876543210"),
-    "AE": _row("AE", "\u963f\u8054\u914b", "United Arab Emirates", "ar", "ar-AE", "ar_AE", "971", -240, "501234567"),
+    "AE": _row(
+        "AE", "\u963f\u8054\u914b", "United Arab Emirates", "ar", "ar-AE", "ar_AE", "971", -240, "501234567",
+        require_identity=True, identity_type="NATIONAL_ID", send_identity_document=True,
+    ),
     "SA": _row("SA", "\u6c99\u7279\u963f\u62c9\u4f2f", "Saudi Arabia", "ar", "ar-SA", "ar_SA", "966", -180, "501234567"),
     "IL": _row("IL", "\u4ee5\u8272\u5217", "Israel", "he", "he-IL", "he_IL", "972", -120, "501234567"),
     "TR": _row("TR", "\u571f\u8033\u5176", "Turkey", "tr", "tr-TR", "tr_TR", "90", -180, "5321234567"),

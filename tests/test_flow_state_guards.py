@@ -120,6 +120,10 @@ def make_flow(session, *, action_ids=False):
     flow._roxy_skipped_telemetry_families = set()
     flow._signup_billing_address_prepared = False
     flow._phone_otp_confirmed = False
+    flow._post_otp_cookie_snapshot = []
+    flow._phone_reconfirm_attempts = 0
+    flow._max_phone_reconfirm_attempts = 2
+    flow._signup_context_risk_sent_after_otp = False
     flow._headless_session = None
     flow._headless_optimized_session = None
     flow.captcha_bypass_mode = "off"
@@ -499,6 +503,10 @@ class FlowStateGuardTests(unittest.TestCase):
         flow.card_retry_delay_seconds = 0.0
         flow.card_retry_jitter_seconds = 0.0
         flow._phone_otp_confirmed = True
+        flow._post_otp_cookie_snapshot = []
+        flow._phone_reconfirm_attempts = 0
+        flow._max_phone_reconfirm_attempts = 2
+        flow._signup_context_risk_sent_after_otp = False
         original_phone = flow.user.phone
         send_calls = {"n": 0}
 
@@ -536,6 +544,94 @@ class FlowStateGuardTests(unittest.TestCase):
                 RuntimeError("Signup failed: no usable access token obtained after 3 in-place")
             )
         )
+
+    def test_phone_confirmation_required_is_not_opaque_card_rotate(self):
+        """PHONE_CONFIRMATION_REQUIRED must rebind OTP, not burn card attempts."""
+        phone_err = {
+            "errors": [
+                {
+                    "message": "PHONE_CONFIRMATION_REQUIRED",
+                    "checkpoints": ["signUpNewMember"],
+                    "path": ["onboardAccount"],
+                    "contingency": True,
+                }
+            ],
+            "data": {"onboardAccount": None},
+        }
+        success = {
+            "data": {
+                "onboardAccount": {
+                    "buyer": {
+                        "userId": "USERPHONE",
+                        "auth": {"accessToken": "euat-after-reconfirm"},
+                    }
+                }
+            }
+        }
+        session = FakeSession()
+        flow = make_flow(session)
+        flow.max_card_attempts = 5
+        flow.card_retry_delay_seconds = 0.0
+        flow.card_retry_jitter_seconds = 0.0
+        flow._phone_otp_confirmed = True
+        flow._post_otp_cookie_snapshot = [{"name": "nsid", "value": "abc", "domain": ".paypal.com"}]
+        flow._phone_reconfirm_attempts = 0
+        flow._max_phone_reconfirm_attempts = 2
+        flow._signup_context_risk_sent_after_otp = True
+        original_card = flow.card.number
+        send_calls = {"n": 0}
+        rebind_calls = {"n": 0}
+
+        def fake_send(_token, _url):
+            send_calls["n"] += 1
+            if send_calls["n"] == 1:
+                return phone_err
+            return success
+
+        def fake_rebind(_token, _url):
+            rebind_calls["n"] += 1
+            flow._phone_otp_confirmed = True
+            flow._post_otp_cookie_snapshot = [
+                {"name": "nsid", "value": "abc", "domain": ".paypal.com"}
+            ]
+            return True
+
+        with patch.object(flow, "_send_signup_attempt", side_effect=fake_send), patch.object(
+            flow, "_rebind_phone_confirmation_for_signup", side_effect=fake_rebind
+        ), patch.object(flow, "_restore_post_otp_cookies"), patch(
+            "paypal.flow.time.sleep"
+        ):
+            flow._signup_with_card_retry(EC_TOKEN, "https://www.paypal.com/signup")
+
+        self.assertEqual(send_calls["n"], 2)
+        self.assertEqual(rebind_calls["n"], 1)
+        self.assertEqual(flow.card.number, original_card)
+        self.assertEqual(flow.state.user_id, "USERPHONE")
+        self.assertFalse(
+            flow._is_opaque_onboard_retryable_signup_error(phone_err["errors"])
+        )
+
+    def test_phone_confirmation_required_fails_fast_after_rebind_exhausted(self):
+        phone_err = {
+            "errors": [
+                {
+                    "message": "PHONE_CONFIRMATION_REQUIRED",
+                    "path": ["onboardAccount"],
+                }
+            ],
+            "data": {"onboardAccount": None},
+        }
+        session = FakeSession()
+        flow = make_flow(session)
+        flow.max_card_attempts = 5
+        flow._phone_otp_confirmed = True
+        flow._phone_reconfirm_attempts = 0
+        flow._max_phone_reconfirm_attempts = 1
+
+        with patch.object(flow, "_send_signup_attempt", return_value=phone_err), patch.object(
+            flow, "_rebind_phone_confirmation_for_signup", return_value=False
+        ), self.assertRaisesRegex(RuntimeError, "PHONE_CONFIRMATION_REQUIRED"):
+            flow._signup_with_card_retry(EC_TOKEN, "https://www.paypal.com/signup")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # PP-TH 项目交接文档（Handoff）
 
 > 写给接手的 AI/工程师：现状、架构、风险与约定。  
-> 最后更新：2026-08-10  
+> 最后更新：2026-08-13  
 > **表述原则**：只描述本仓库自身能力与行为。
 
 ---
@@ -94,7 +94,17 @@ Phase4  授权
 - `elevate_bind`（别名 `identity_elevation` 等）→ `WebElevationPayPalFlow` / `IdentityElevationPayPalFlow`  
 别名在 `flow.py` 与 `web.py` 各有归一逻辑，改时需同步。
 
-**地址**：OSM（可关）→ `ADDRESS_POOLS` → Faker。
+**资料从哪来（2026-08-12 确认）**
+
+| 字段 | 来源 | 说明 |
+|------|------|------|
+| 账单/住宅**地址** | **在线优先** | OSM Nominatim → Overpass + `data/runtime_address_cache.json`；`PAYPAL_ONLINE_ADDRESS` 默认开（未设 env 也视为 `1`） |
+| 姓名 / 邮箱 / 电话 / 卡 / DOB | **本地生成** | 国别 profile + Faker locale，禁止串国 |
+| 证件（TH 身份证、BR CPF 等） | **本地算法** | 非网上查实人；按 `regions` / KYC 规则填 SignUp |
+| 协议 content/hash | 流程内可 live | 部分国家 `prefer_live_extract`，跑 BA 时从 PayPal 页抽取 |
+
+失败或 `PAYPAL_ONLINE_ADDRESS=0` 时：地址回退 `ADDRESS_POOLS` → Faker。  
+VPS 日志样例：`Online address resolved for TH: …` / `US: …` / `ID: …`。
 
 **重试**：换卡 `max_card_attempts`；全流程 `max_flow_attempts`；拒号可 Web 换号。
 
@@ -155,9 +165,33 @@ SSH 不稳定时注意 banner 超时与重试。
 ```bash
 PAYPAL_ONLINE_ADDRESS=0 python -m unittest discover -s tests
 python -m compileall -q paypal web.py main.py config.py
+# Buyer 双模式
+python -m pytest tests/test_buyer_identity_mode.py -q
+# TH KYC bare-user 构建
+python -m pytest tests/test_th_signup_kyc.py -q
 ```
 
-2026-08-10 本地冒烟（假 BA）：关键单测通过；44 国构造 44/44；`elevate_bind` 到 Phase2 失败收尾不卡死；HTTP `identity_elevation` → `elevate_bind`；**phone 区号须匹配 country**。
+### 历史冒烟
+
+- **2026-08-10**（假 BA）：关键单测通过；44 国构造 44/44；`elevate_bind` 到 Phase2 失败收尾不卡死；HTTP `identity_elevation` → `elevate_bind`；**phone 区号须匹配 country**。
+- **2026-08-12**（VPS 生产 `/opt/pp-th`）：
+  - TH KYC harden 已部署；VPS bare-user `ASSERT_PASS`（nationality + 13 位 NATIONAL_ID + residentialAddress）
+  - 本地 `test_th_signup_kyc` 6 passed；`test_buyer_identity_mode` 7 passed
+  - **在线地址**：默认开；任务日志可见 `Online address resolved for …`
+  - **`elevate_bind`**：API 归一化 / 路由 / 单测通；job 字段与日志 `buyer=elevate_bind` 正确；**Live 整单**仍需新 BA（历史 BA 死在 Phase2 无 EC / 代理 TLS 抖动）
+  - 历史 BA 仅 3 个且均失效 → 未刷新 `paypal_signup_variables_last.json`（旧快照仍可能显示无 KYC，**勿当回归**）
+- **2026-08-13**：
+  - 本地 + VPS 44 国离线矩阵 **44/44 PASS**（资料 / 证件 / SignUp 变量；未打真 BA）
+  - KYC 必通：TH 13 位、ID 16、PH 16、TW 10、AE 15、BR CPF 11；空 UserInfo 会回填
+  - 主仓此前仍停在 8/11 OTP 提交；本提交才把 KYC harden + 文档推上 GitHub
+  - Live 最近失败仍是假 BA / hCaptcha / 代理 TLS，**不是**缺 KYC 字段
+
+### 参考实现对齐（勿混）
+
+| 参考路径 | 角色 | PP-TH 怎么用 |
+|----------|------|----------------|
+| `paypal-agreement-protocol-main` | **主参考**：多国 + **`identity_elevation`**（`elevation_flow.py`） | `elevate_bind` / `IdentityElevationPayPalFlow` 按此移植（~80% 有效行同源语义）；KYC/SignUp 字段语义也对照此包 |
+| `openai-paypal`（BR 中心） | 巴西单国 + CPF 资料 | **仅**国别/CPF 资料层；**不是** elevate 主模板；勿整包对齐以免冲掉 phone-confirm / TH KYC 守卫 |
 
 ---
 
@@ -165,12 +199,14 @@ python -m compileall -q paypal web.py main.py config.py
 
 1. **NUMBER_NOT_SUPPORTED**：部分号段/虚拟号被拒；换真实 SIM、换出口 IP；避免同 IP 狂换号  
 2. **authchallenge / reCAPTCHA**：外部 solver 默认禁用，可能卡在注册  
-3. **BA 短时效**：同一 token 复用易 generic-error  
+3. **BA 短时效**：同一 token 复用易 generic-error / 无 EC token  
 4. **老系统 Playwright 版本**与 GLIBC 限制  
 5. **Web 任务内存态**，重启即丢  
-6. **elevate_bind 全成功**依赖真实 BA + 该国号 + 可用出口；假 BA 只能验到 Phase2  
+6. **elevate_bind 全成功**依赖真实 BA + 该国号 + 可用出口；假 BA / 死 BA 只能验到 Phase2 或更早  
 7. **OSM 超时**：CI/弱网设 `PAYPAL_ONLINE_ADDRESS=0`  
 8. **phone/country 不一致** → 创建任务 400  
+9. **代理国家筛选**：cliproxy 出口国常与表单期望国不符；无 country 过滤可通、带过滤可能清空池；TLS 偶发 `WRONG_VERSION_NUMBER`  
+10. **诊断文件 mtime**：未跑到 SignUp 时 `paypal_signup_variables_last.json` 仍是旧任务快照  
 
 ---
 
@@ -197,7 +233,9 @@ python -m compileall -q paypal web.py main.py config.py
 
 ---
 
-## 11. 2026-08-10 变更摘要
+## 11. 变更摘要
+
+### 2026-08-10
 
 | 主题 | 内容 |
 |------|------|
@@ -206,5 +244,22 @@ python -m compileall -q paypal web.py main.py config.py
 | Address pools | 44 国 curated 池 |
 | 文档 | 全量 md 与现行行为对齐 |
 | 交流群 | QQ **`1098798456`**（README / SETUP / UI 页脚） |
+
+### 2026-08-12
+
+| 主题 | 内容 |
+|------|------|
+| TH KYC | SignUp 强制 nationality / NATIONAL_ID / residential；`_ensure_user_kyc_fields` 回填 + 硬断言；diag 看真值非仅 key |
+| Buyer `elevate_bind` | 单测+VPS 路由/API 验证通过；Live 升权段待新 BA |
+| 在线地址 | 生产确认默认在线 OSM；非全资料在线 |
+| 参考说明 | elevate 主参考 = `paypal-agreement-protocol-main`；openai-BR 不整包对齐 |
+
+### 2026-08-13
+
+| 主题 | 内容 |
+|------|------|
+| 44 国矩阵 | 本地 + VPS `generate_user` / `_build_signup_variables` 全过 |
+| 主仓同步 | KYC / OTP 守卫 / 文档首次推到 `origin/main` |
+| Live | 仍需真 BA + 通代理；假 BA 停在 Phase2 无 EC |
 
 入口：`README.md` · `SETUP.md` · `PROTOCOL_CHAIN.md` · `PROXY.md` · `DEPLOY.md` · `AI_HANDOFF.md`。

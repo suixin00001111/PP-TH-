@@ -233,6 +233,11 @@ class PayPalFlow:
             self.user.phone_country_code = cc
         except Exception:
             pass
+        # Ensure TH/ID/PH/TW/AE/BR KYC fields exist on the user before any phase.
+        try:
+            self._ensure_user_kyc_fields()
+        except Exception as kyc_exc:
+            logger.warning("Initial KYC backfill skipped: {}", kyc_exc)
 
         self._requested_risk_signals_mode = self._risk_signals_mode_raw()
         self._roxy_runtime_disabled_reason = ""
@@ -303,6 +308,13 @@ class PayPalFlow:
         # Full-flow retries after this point must not re-prompt phone/OTP unless
         # the checkout session itself was discarded for a non-signup reason.
         self._phone_otp_confirmed = False
+        # Cookie snapshot taken right after OTP CONFIRMED. Headless signup-context
+        # risk often rewrites the jar and drops phone-confirmation state, which
+        # surfaces as PHONE_CONFIRMATION_REQUIRED on SignUpNewMember.
+        self._post_otp_cookie_snapshot: list[dict[str, Any]] = []
+        self._phone_reconfirm_attempts = 0
+        self._max_phone_reconfirm_attempts = 2
+        self._signup_context_risk_sent_after_otp = False
         self._headless_session: Any | None = None
         self._headless_optimized_session: Any | None = None
         self._datadome_browser_document: dict[str, Any] = {}
@@ -2440,6 +2452,9 @@ class PayPalFlow:
         self._signup_billing_address_prepared = False
         # New EC session always needs a fresh phone challenge.
         self._phone_otp_confirmed = False
+        self._post_otp_cookie_snapshot = []
+        self._phone_reconfirm_attempts = 0
+        self._signup_context_risk_sent_after_otp = False
         self._smsbower_activation = None
         self._headless_session = None
         self._headless_optimized_session = None
@@ -5761,6 +5776,22 @@ class PayPalFlow:
         confirm_state = confirm_data.get("state", "")
         if confirm_state == "CONFIRMED":
             self._phone_otp_confirmed = True
+            self._snapshot_post_otp_cookies()
+            # Emit success telemetry the browser fires after confirm, before SignUp.
+            try:
+                send_weasley_log(
+                    self.session,
+                    self.state.ec_token,
+                    signup_url,
+                    [
+                        "weasley_confirm_phone_confirmation_success",
+                        "weasley_risk_based_phone_confirmation_completed",
+                    ],
+                    country=self._content_country(),
+                    lang=self._content_lang(),
+                )
+            except Exception as exc:
+                logger.debug("post-OTP weasley success log soft-failed: {}", exc)
             logger.success("OTP confirmed successfully!")
             return True
 
@@ -5773,6 +5804,42 @@ class PayPalFlow:
         else:
             logger.warning("OTP confirmation failed, state: {}", confirm_state or "<missing>")
         return False
+
+    def _snapshot_post_otp_cookies(self) -> None:
+        """Freeze HTTP jar right after phone OTP is accepted by PayPal."""
+        try:
+            export = getattr(self.session, "export_cookies_for_browser", None)
+            cookies = export() if callable(export) else []
+            if isinstance(cookies, list) and cookies:
+                self._post_otp_cookie_snapshot = [
+                    dict(item) for item in cookies if isinstance(item, dict)
+                ]
+                logger.info(
+                    "Post-OTP cookie snapshot captured ({} cookies) to protect phone confirmation state.",
+                    len(self._post_otp_cookie_snapshot),
+                )
+            else:
+                self._post_otp_cookie_snapshot = []
+        except Exception as exc:
+            self._post_otp_cookie_snapshot = []
+            logger.debug("Post-OTP cookie snapshot failed: {}", exc)
+
+    def _restore_post_otp_cookies(self, reason: str = "") -> None:
+        """Re-apply post-OTP cookies after browser risk may have rewritten the jar."""
+        snapshot = list(getattr(self, "_post_otp_cookie_snapshot", None) or [])
+        if not snapshot:
+            return
+        try:
+            importer = getattr(self.session, "import_browser_cookies", None)
+            if callable(importer):
+                importer(snapshot)
+                logger.info(
+                    "Restored {} post-OTP cookies after {} to keep phone confirmation bound.",
+                    len(snapshot),
+                    reason or "browser risk",
+                )
+        except Exception as exc:
+            logger.warning("Failed to restore post-OTP cookies ({}): {}", reason or "unknown", exc)
 
     def _confirm_phone_with_retry(self, token: str, signup_url: str):
         """Loop until OTP is confirmed; user can enter a new phone to resend."""
@@ -5879,12 +5946,23 @@ class PayPalFlow:
         """Country-shaped line1 (regional address form)."""
         street = (self.address.street or "").strip()
         house = (self.address.house_number or "").strip()
-        if house and (f", {house}" in street or street.endswith(house)):
+        # Already a full ANS line1 stored as street (house cleared or embedded).
+        if not house:
+            return street
+        if house and (
+            street.startswith(f"{house} ")
+            or street == house
+            or f", {house}" in street
+            or street.endswith(f" {house}")
+        ):
             return street
         style = getattr(getattr(self, "protocol", None), "address_style", None) or "generic"
         try:
             return format_billing_line1(style, street, house, getattr(self.address, "district", "") or "")
         except Exception:
+            country = str(getattr(self.address, "country", "") or "").upper()
+            if country in {"TH", "ID", "PH", "TW", "US", "GB", "AU", "CA", "AE"}:
+                return f"{house} {street}".strip()
             if house:
                 return f"{street}, {house}".strip(", ")
             return street
@@ -5928,28 +6006,148 @@ class PayPalFlow:
                 continue
         return written
 
+    def _country_requires_identity_document(self, country: str | None = None) -> bool:
+        code = str(
+            country
+            or getattr(self.address, "country", "")
+            or getattr(getattr(self, "protocol", None), "code", "")
+            or ""
+        ).upper()
+        protocol = getattr(self, "protocol", None)
+        if bool(getattr(protocol, "send_identity_document", False)):
+            return True
+        if should_send_identity(code):
+            return True
+        # Hard-require markets whose Weasley form always asks for national ID.
+        # Missing these fields yields opaque onboardAccount FAILURE.
+        return code in {"BR", "TH", "ID", "PH", "TW", "AE"}
+
+    def _ensure_user_kyc_fields(self) -> None:
+        """Backfill nationality / national ID on self.user before SignUpNewMember.
+
+        Older job paths or partial UserInfo objects may lack identity_* fields
+        even when the country protocol requires them. Generate checksum-valid
+        values in-place so _build_signup_variables always emits KYC.
+        """
+        country = str(
+            getattr(self.address, "country", "")
+            or getattr(getattr(self, "protocol", None), "code", "")
+            or ""
+        ).upper()
+        if not country or not self._country_requires_identity_document(country):
+            return
+
+        user = self.user
+        protocol = getattr(self, "protocol", None)
+        identity_type = str(
+            getattr(user, "identity_document_type", "")
+            or getattr(protocol, "identity_type", "")
+            or ("CPF" if country == "BR" else "NATIONAL_ID")
+        ).upper()
+        raw_value = str(
+            getattr(user, "identity_document_number", "")
+            or getattr(user, "cpf", "")
+            or getattr(user, "national_id", "")
+            or ""
+        ).replace(".", "").replace("-", "").replace(" ", "").strip()
+
+        if not raw_value:
+            try:
+                from paypal.oaipy_data import (
+                    generate_cpf,
+                    generate_indonesia_nik,
+                    generate_philippines_national_id,
+                    generate_taiwan_national_id,
+                    generate_thai_national_id,
+                    generate_uae_emirates_id,
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning("KYC generator import failed: {}", exc)
+                generate_cpf = None  # type: ignore
+                generate_thai_national_id = None  # type: ignore
+                generate_indonesia_nik = None  # type: ignore
+                generate_philippines_national_id = None  # type: ignore
+                generate_taiwan_national_id = None  # type: ignore
+                generate_uae_emirates_id = None  # type: ignore
+
+            dob = str(getattr(user, "dob", "") or "")
+            if identity_type == "CPF" and generate_cpf:
+                raw_value = generate_cpf()
+            elif country == "TH" and generate_thai_national_id:
+                raw_value = generate_thai_national_id()
+            elif country == "ID" and generate_indonesia_nik:
+                first = str(getattr(user, "first_name", "") or "").lower()
+                female = first in {
+                    "siti", "ayu", "dewi", "putri", "rina", "nadia", "intan", "maya",
+                }
+                raw_value = generate_indonesia_nik(dob, female=female)
+            elif country == "PH" and generate_philippines_national_id:
+                raw_value = generate_philippines_national_id()
+            elif country == "TW" and generate_taiwan_national_id:
+                raw_value = generate_taiwan_national_id()
+            elif country == "AE" and generate_uae_emirates_id:
+                raw_value = generate_uae_emirates_id(dob)
+            else:
+                raw_value = "".join(str(random.randint(0, 9)) for _ in range(13))
+            logger.info(
+                "Backfilled missing {} identity document for signup KYC (type={})",
+                country,
+                identity_type,
+            )
+
+        try:
+            user.identity_document_type = identity_type
+            user.identity_document_number = raw_value
+            if identity_type == "CPF":
+                user.cpf = raw_value
+            user.national_id = raw_value
+            if not str(getattr(user, "nationality", "") or "").strip():
+                user.nationality = country
+        except Exception as exc:
+            logger.warning("Failed to attach KYC fields onto user object: {}", exc)
+
     def _identity_document_payload(self) -> dict[str, str] | None:
         """Only send identityDocument when the country protocol requires a real value."""
         country = str(self.address.country or getattr(getattr(self, "protocol", None), "code", "") or "").upper()
-        protocol = getattr(self, "protocol", None)
-        send_doc = bool(getattr(protocol, "send_identity_document", False)) or should_send_identity(country)
-        if not send_doc:
+        if not self._country_requires_identity_document(country):
             return None
+        self._ensure_user_kyc_fields()
+        protocol = getattr(self, "protocol", None)
         identity_type = (
-            getattr(protocol, "identity_type", None)
+            getattr(self.user, "identity_document_type", None)
+            or getattr(protocol, "identity_type", None)
             or ("CPF" if country == "BR" else None)
+            or ("NATIONAL_ID" if country in {"TH", "ID", "PH", "TW", "AE"} else None)
         )
         if not identity_type:
             return None
         raw_value = (
-            getattr(self.user, "cpf", "")
+            getattr(self.user, "identity_document_number", "")
+            or getattr(self.user, "cpf", "")
             or getattr(self.user, "national_id", "")
             or ""
         )
-        value = str(raw_value).replace(".", "").replace("-", "").strip()
+        value = str(raw_value).replace(".", "").replace("-", "").replace(" ", "").strip()
         if not value:
+            logger.error(
+                "Signup KYC required for {} but identity document value is still empty",
+                country,
+            )
             return None
         return {"type": str(identity_type), "value": value}
+
+    def _countries_requiring_residential_address(self) -> set[str]:
+        # Matches paypal-agreement-protocol-main: these onboarding variants
+        # validate a separate residentialAddress argument. Supplying only
+        # billingAddress can produce RESIDENTIAL_ADDRESS_NOT_FOUND / opaque
+        # createMemberAccount failures.
+        return {
+            "GB", "US", "JP", "TH", "ID", "PH", "TW", "AE", "AU", "CA",
+            "NL", "DE", "BA", "BH", "RO",
+        }
+
+    def _countries_with_empty_billing_line2(self) -> set[str]:
+        return {"GB", "US", "JP", "AU", "CA", "NL", "DE"}
 
     @staticmethod
     def _form_safe_address_text(value: str, *, fallback: str = "") -> str:
@@ -5971,7 +6169,25 @@ class PayPalFlow:
         Opaque onboardAccount FAILURE ("Cannot destructure property 'index'...")
         is often caused by incoherent TH address payloads. Prefer curated ASCII
         locations for TH instead of Faker th_TH noise.
+
+        Once PayPal AddressAutocomplete succeeds (ANS), keep that selection:
+        re-sanitizing Thai-script normalized lines into a different curated
+        address makes billingAddress diverge from what ANS selected and
+        frequently yields the same opaque onboard failure.
         """
+        if getattr(self, "_billing_address_autocomplete_succeeded", False):
+            # Still coerce empty/invalid state for GraphQL, but do not regenerate.
+            country = str(
+                getattr(self.address, "country", "")
+                or getattr(getattr(self, "protocol", None), "code", "")
+                or "TH"
+            ).upper()
+            state = str(getattr(self.address, "state", "") or "").strip()
+            if (not state) or state.upper() in {"ST", "STATE", "N/A", "NA", "NONE"}:
+                self.address.state = "Bangkok" if country == "TH" else (country or "ST")
+            self.address.country = country or "TH"
+            return
+
         country = str(
             getattr(self.address, "country", "")
             or getattr(getattr(self, "protocol", None), "code", "")
@@ -6044,17 +6260,41 @@ class PayPalFlow:
         if self._content_metadata_is_unresolved():
             self._apply_configured_or_cached_signup_content_metadata()
         content_identifier = self._resolved_content_identifier()
-        billing_autocomplete_type = (
-            "ANS" if self._billing_address_autocomplete_succeeded else "MANUAL"
-        )
+        ans_ok = bool(getattr(self, "_billing_address_autocomplete_succeeded", False))
+        billing_autocomplete_type = "ANS" if ans_ok else "MANUAL"
+        # Reference protocol: isUserModified is False when ANS selected the
+        # address; True only for manual entry. Always-True here made PayPal
+        # treat an ANS address as user-edited and often rejected it.
+        billing_user_modified = not ans_ok
         style = getattr(getattr(self, "protocol", None), "address_style", None) or "generic"
         self._ensure_form_safe_billing_address()
-        line2 = format_billing_line2(style, getattr(self.address, "district", "") or "")
+        country = str(self.address.country or "").upper()
+        if country in self._countries_with_empty_billing_line2():
+            line2 = ""
+        else:
+            line2 = format_billing_line2(style, getattr(self.address, "district", "") or "")
+        # NL/DE signup variants leave state empty on billing.
+        billing_state = "" if country in {"NL", "DE"} else (self.address.state or "")
         phone_local = re.sub(r"\D+", "", str(self.user.phone_local or ""))
         phone_cc = re.sub(r"\D+", "", str(self.user.phone_country_code or ""))
         dob_payload = self._dob_payload()
         if not phone_local or not phone_cc:
             raise RuntimeError("Signup aborted: phone payload is incomplete")
+        address_quality = {
+            "autoCompleteType": billing_autocomplete_type,
+            "isUserModified": billing_user_modified,
+        }
+        billing_address: dict[str, object] = {
+            "postalCode": self.address.postal_code,
+            "line1": self._billing_line1(),
+            "line2": line2,
+            "city": self.address.city,
+            "state": billing_state,
+            "accountQuality": dict(address_quality),
+            "country": self.address.country,
+            "familyName": self.user.last_name,
+            "givenName": self.user.first_name,
+        }
         payload: dict[str, object] = {
             "card": {
                 "cardNumber": self.card.number,
@@ -6074,20 +6314,7 @@ class PayPalFlow:
             },
             "supportedThreeDsExperiences": ["IFRAME"],
             "token": token,
-            "billingAddress": {
-                "postalCode": self.address.postal_code,
-                "line1": self._billing_line1(),
-                "line2": line2,
-                "city": self.address.city,
-                "state": self.address.state,
-                "accountQuality": {
-                    "autoCompleteType": billing_autocomplete_type,
-                    "isUserModified": True,
-                },
-                "country": self.address.country,
-                "familyName": self.user.last_name,
-                "givenName": self.user.first_name,
-            },
+            "billingAddress": billing_address,
             "shippingAddress": {
                 "postalCode": "",
                 "line1": "",
@@ -6102,15 +6329,64 @@ class PayPalFlow:
                 "givenName": self.user.first_name,
             },
             "contentIdentifier": content_identifier,
-            "marketingOptOut": True,
+            # Align with reference protocol (marketing opt-in default false).
+            "marketingOptOut": False,
             "password": self.user.password,
             "dateOfBirth": dob_payload,
             "crsData": None,
             "legalAgreements": {},
         }
+        # Always backfill + attach country KYC. Missing nationality /
+        # identityDocument / residentialAddress is the opaque TH failure mode.
+        self._ensure_user_kyc_fields()
         identity_document = self._identity_document_payload()
         if identity_document is not None:
             payload["identityDocument"] = identity_document
+        else:
+            # Explicit null only when the market does not require a document.
+            payload["identityDocument"] = None
+        nationality = str(
+            getattr(self.user, "nationality", "") or country or ""
+        ).upper()
+        if self._country_requires_identity_document(country) or country in {
+            "TH", "ID", "PH", "TW", "AE", "CA",
+        }:
+            if not nationality:
+                nationality = country
+            payload["nationality"] = nationality
+        elif nationality:
+            payload["nationality"] = nationality
+        if country == "ID":
+            payload["placeOfBirth"] = (
+                str(getattr(self.user, "place_of_birth", "") or nationality or "ID").upper()
+            )
+        if country == "CA":
+            payload["occupation"] = str(getattr(self.user, "occupation", "") or "BUSINESS")
+        if country in self._countries_requiring_residential_address():
+            payload["residentialAddress"] = {
+                **billing_address,
+                "accountQuality": dict(address_quality),
+            }
+        # Hard assert for TH-class markets: never submit without KYC again.
+        if self._country_requires_identity_document(country):
+            if not isinstance(payload.get("identityDocument"), dict):
+                raise RuntimeError(
+                    f"Signup aborted: {country} requires identityDocument in "
+                    "SignUpNewMember variables but it is missing"
+                )
+            if not payload.get("nationality"):
+                raise RuntimeError(
+                    f"Signup aborted: {country} requires nationality in "
+                    "SignUpNewMember variables but it is missing"
+                )
+        if (
+            country in self._countries_requiring_residential_address()
+            and "residentialAddress" not in payload
+        ):
+            raise RuntimeError(
+                f"Signup aborted: {country} requires residentialAddress in "
+                "SignUpNewMember variables but it is missing"
+            )
         return payload
 
     def _send_address_autocomplete(self, token: str) -> None:
@@ -6160,14 +6436,59 @@ class PayPalFlow:
                 normalized.get("city"),
                 normalized.get("state"),
             )
-            self.address.street = normalized.get("line1") or self.address.street
-            self.address.district = normalized.get("line2") or self.address.district
-            self.address.city = normalized.get("city") or self.address.city
-            self.address.state = normalized.get("state") or self.address.state
-            self.address.postal_code = normalized.get("postalCode") or self.address.postal_code
+            self._apply_paypal_normalized_address(normalized)
             self._billing_address_autocomplete_succeeded = True
         except Exception as e:
             logger.warning(f"AddressAutocompleteFromPostalCodeQuery failed: {e}")
+
+    def _apply_paypal_normalized_address(self, normalized: dict[str, Any]) -> None:
+        """Apply PayPal postcode-autocomplete selection without destroying ANS fidelity.
+
+        Thai/ID/PH/TW line1 is typically \"<house> <street>\".  Storing the whole
+        line1 as street while leaving an old house_number causes _billing_line1
+        to append the house again (\"street, house\") and diverge from ANS.
+        """
+        if not isinstance(normalized, dict) or not normalized:
+            return
+        country = str(getattr(self.address, "country", "") or "").upper()
+        normalized_line1 = str(normalized.get("line1") or "").strip()
+        if normalized_line1:
+            if country in {"GB", "US", "TH", "ID", "PH", "TW", "AE", "AU", "CA", "BA", "BH"}:
+                match = re.match(
+                    r"^([0-9]+(?:/[0-9A-Za-z-]+)?[A-Za-z]?(?:-[0-9]+[A-Za-z]?)?)\s+(.+)$",
+                    normalized_line1,
+                )
+                if match:
+                    self.address.house_number = match.group(1)
+                    self.address.street = match.group(2).strip()
+                else:
+                    # Full line1 selected by PayPal — keep as street, clear house
+                    # so _billing_line1 does not append a stale house number.
+                    self.address.street = normalized_line1
+                    self.address.house_number = ""
+            elif country in {"NL", "DE"}:
+                match = re.match(
+                    r"^(.+?)\s+(\d+[A-Za-z]?(?:-\d+)?(?:\s*[A-Za-z])?)$",
+                    normalized_line1,
+                )
+                if match:
+                    self.address.street = match.group(1).strip()
+                    self.address.house_number = match.group(2).strip()
+                else:
+                    self.address.street = normalized_line1
+            else:
+                self.address.street = normalized_line1
+        line2 = str(normalized.get("line2") or "").strip()
+        if line2:
+            self.address.district = line2
+        if normalized.get("city"):
+            self.address.city = str(normalized.get("city") or self.address.city)
+        if normalized.get("state"):
+            self.address.state = str(normalized.get("state") or self.address.state)
+        if normalized.get("postalCode"):
+            self.address.postal_code = str(
+                normalized.get("postalCode") or self.address.postal_code
+            )
 
     def _send_signup_attempt(self, token: str, signup_url: str) -> dict[str, Any] | list[Any]:
         card_type = self._card_issuer_type()
@@ -6210,6 +6531,7 @@ class PayPalFlow:
             )
 
         # Sanitize TH/Faker address noise before autocomplete + SignUpNewMember.
+        # After ANS succeeds, _ensure_form_safe must not regenerate the address.
         self._ensure_form_safe_billing_address()
         if not getattr(self, "_signup_billing_address_prepared", False):
             self._send_address_autocomplete(token)
@@ -6220,13 +6542,31 @@ class PayPalFlow:
                 "skipping AddressAutocompleteFromPostalCodeQuery."
             )
 
-        risk_mode = self._signup_context_risk_mode()
-        if risk_mode == "headless":
-            self._send_signup_context_risk_signals_with_headless(signup_url, token)
-        elif risk_mode in {"roxy", "auto"} or self._roxy_risk_runtime_active():
-            sent_signup_context_risk = self._send_signup_context_risk_signals_with_roxy(signup_url, token)
-            if not sent_signup_context_risk and self._signup_context_risk_mode() == "headless":
+        # After OTP is confirmed, only run browser signup-context risk ONCE.
+        # Re-running headless on every card/identity retry costs ~2 minutes and
+        # frequently rewrites cookies, which then yields PHONE_CONFIRMATION_REQUIRED.
+        risk_already_sent = bool(getattr(self, "_signup_context_risk_sent_after_otp", False))
+        otp_confirmed = bool(getattr(self, "_phone_otp_confirmed", False))
+        if otp_confirmed and risk_already_sent:
+            logger.info(
+                "Skipping repeated signup-context browser risk after OTP "
+                "(already executed once for this confirmed phone session)."
+            )
+            self._restore_post_otp_cookies("pre-signup cookie guard")
+        else:
+            risk_mode = self._signup_context_risk_mode()
+            if risk_mode == "headless":
                 self._send_signup_context_risk_signals_with_headless(signup_url, token)
+            elif risk_mode in {"roxy", "auto"} or self._roxy_risk_runtime_active():
+                sent_signup_context_risk = self._send_signup_context_risk_signals_with_roxy(
+                    signup_url, token
+                )
+                if not sent_signup_context_risk and self._signup_context_risk_mode() == "headless":
+                    self._send_signup_context_risk_signals_with_headless(signup_url, token)
+            if otp_confirmed:
+                self._signup_context_risk_sent_after_otp = True
+                # Headless/Roxy cookie import can drop phone-confirmation state.
+                self._restore_post_otp_cookies("signup-context risk")
 
         self._strict_signup_preflight_or_raise()
 
@@ -6245,8 +6585,21 @@ class PayPalFlow:
             "billingState",
             "dateOfBirth",
         ]
-        if getattr(getattr(self, "protocol", None), "send_identity_document", False) or str(self.address.country or "").upper() == "BR":
-            _signup_fields.append("identityDocumentNumber")
+        country_code = str(self.address.country or "").upper()
+        send_identity = (
+            bool(getattr(getattr(self, "protocol", None), "send_identity_document", False))
+            or should_send_identity(country_code)
+            or country_code in {"BR", "TH", "ID", "PH", "TW", "AE"}
+        )
+        if send_identity:
+            if country_code == "BR":
+                _signup_fields.append("identityDocumentNumber")
+            else:
+                _signup_fields.extend(
+                    ["identityDocumentType", "identityDocumentNumber", "nationality"]
+                )
+        if country_code == "CA" and "occupation" not in _signup_fields:
+            _signup_fields.append("occupation")
         self._send_signup_field_events(
             self.session,
             token,
@@ -6264,14 +6617,24 @@ class PayPalFlow:
             lang=self._content_lang(),
         )
         signup_variables = self._build_signup_variables(token)
+        identity_doc = signup_variables.get("identityDocument")
         written = self._diag_write_json(
             "paypal_signup_variables_last.json",
             {
                 "token_kind": "EC" if self._is_ec_token(token) else "OTHER",
                 "country": self.address.country,
                 "content_identifier": signup_variables.get("contentIdentifier"),
-                "has_identity_document": "identityDocument" in signup_variables,
+                # Truthy document object only — key-with-null previously lied.
+                "has_identity_document": bool(
+                    isinstance(identity_doc, dict) and identity_doc.get("value")
+                ),
+                "has_nationality": bool(signup_variables.get("nationality")),
+                "has_residential_address": "residentialAddress" in signup_variables,
                 "has_crs_data": "crsData" in signup_variables,
+                "nationality": signup_variables.get("nationality"),
+                "identity_document_type": (
+                    identity_doc.get("type") if isinstance(identity_doc, dict) else None
+                ),
                 "variables": sanitize_for_log(signup_variables),
             },
         )
@@ -6652,6 +7015,20 @@ class PayPalFlow:
         return False
 
     @staticmethod
+    def _is_phone_confirmation_required_error(errors: list[dict[str, Any]]) -> bool:
+        """True when SignUp says phone OTP binding is missing/expired for this EC."""
+        for err in errors or []:
+            message = str(err.get("message") or err.get("_name") or err.get("name") or "").upper()
+            if "PHONE_CONFIRMATION_REQUIRED" in message:
+                return True
+            checkpoints = {str(item).lower() for item in (err.get("checkpoints") or [])}
+            if "phoneconfirmation" in "".join(checkpoints) or "phone_confirmation" in "".join(
+                checkpoints
+            ):
+                return True
+        return False
+
+    @staticmethod
     def _is_opaque_onboard_retryable_signup_error(errors: list[dict[str, Any]]) -> bool:
         """Empty onboardAccount failures that should rotate identity in-place.
 
@@ -6659,7 +7036,12 @@ class PayPalFlow:
         "Cannot destructure property 'index' of ...") without a card checkpoint
         and without an access token. Restarting the whole flow re-prompts OTP;
         rotating email/card while keeping the confirmed phone is safer.
+
+        PHONE_CONFIRMATION_REQUIRED is intentionally excluded: rotating card/
+        email cannot fix a missing phone-confirmation binding.
         """
+        if PayPalFlow._is_phone_confirmation_required_error(errors):
+            return False
         if not errors:
             # Truly empty onboardAccount + no errors still warrants in-place retry.
             return True
@@ -6695,6 +7077,45 @@ class PayPalFlow:
                 return True
         # Unknown non-card errors with empty onboard: still try in-place once path.
         return not PayPalFlow._is_card_related_signup_error(errors)
+
+    def _rebind_phone_confirmation_for_signup(self, token: str, signup_url: str) -> bool:
+        """Re-prompt OTP once when SignUp reports PHONE_CONFIRMATION_REQUIRED.
+
+        Does not restart Phase 0. Keeps the same EC token/phone and only re-runs
+        initiate+confirm so the operator is not forced through the full loop.
+        """
+        attempts = int(getattr(self, "_phone_reconfirm_attempts", 0) or 0)
+        max_attempts = int(getattr(self, "_max_phone_reconfirm_attempts", 2) or 2)
+        if attempts >= max_attempts:
+            logger.error(
+                "PHONE_CONFIRMATION_REQUIRED persists after {} re-confirm attempt(s); "
+                "not rotating card and not restarting Phase 0.",
+                attempts,
+            )
+            return False
+
+        self._phone_reconfirm_attempts = attempts + 1
+        # Binding is no longer trusted by PayPal for this EC.
+        self._phone_otp_confirmed = False
+        self._post_otp_cookie_snapshot = []
+        self._signup_context_risk_sent_after_otp = False
+        logger.warning(
+            "SignUp returned PHONE_CONFIRMATION_REQUIRED (re-confirm {}/{}). "
+            "Re-binding phone OTP on the same EC without full-flow restart...",
+            self._phone_reconfirm_attempts,
+            max_attempts,
+        )
+        try:
+            # Prefer the same operator/SMS path used for the initial OTP.
+            self._confirm_phone_with_retry(token, signup_url)
+        except Exception as exc:
+            logger.error("Phone re-confirm failed: {}", exc)
+            return False
+        if not getattr(self, "_phone_otp_confirmed", False):
+            return False
+        # Force a fresh post-OTP signup attempt path (risk once, then SignUp).
+        self._signup_context_risk_sent_after_otp = False
+        return True
 
     def _wait_and_rotate_card(self, reason: str) -> None:
         logger.warning(
@@ -6790,6 +7211,20 @@ class PayPalFlow:
                 raise RuntimeError(
                     "Signup failed: ACCOUNT_ALREADY_EXISTS and no prior access "
                     "token is available for this session."
+                )
+
+            # Phone confirmation binding missing/expired: re-OTP on same EC.
+            # Do NOT rotate card/email — that never clears this contingency and
+            # previously burned all card attempts for ~10 minutes.
+            if self._is_phone_confirmation_required_error(errors):
+                if self._rebind_phone_confirmation_for_signup(token, signup_url):
+                    self._restore_post_otp_cookies("phone re-confirm")
+                    continue
+                raise RuntimeError(
+                    "Signup failed: PHONE_CONFIRMATION_REQUIRED after OTP. "
+                    "PayPal no longer treats the phone as confirmed for this EC "
+                    f"(reconfirm_attempts={getattr(self, '_phone_reconfirm_attempts', 0)}). "
+                    "Not rotating card/identity; fix phone binding or start a fresh BA/EC."
                 )
 
             if self._has_signup_error_message(errors, "THREE_DS_CHALLENGE_REQUIRED"):

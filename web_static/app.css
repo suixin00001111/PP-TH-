@@ -1,4 +1,4 @@
-/* PP-TH tech HUD theme — light / dark */
+﻿/* PP-TH tech HUD theme — light / dark */
 :root,
 html[data-theme="dark"] {
   color-scheme: dark;
@@ -1178,4 +1178,45 @@ select#countrySelect {
   .otp-form button {
     width: 100%;
   }
+}
+
+/* Version switcher tabs (optimized console only) */
+.version-tabs {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  overflow: hidden;
+}
+.version-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-decoration: none;
+  color: var(--muted);
+  border-right: 1px solid var(--line);
+  transition: color .15s var(--ease), background .15s var(--ease);
+}
+.version-tab:last-child { border-right: 0; }
+.version-tab:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.version-tab.is-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.version-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+@media (max-width: 720px) {
+  .version-tabs { width: 100%; }
+  .version-tab { flex: 1; }
 }

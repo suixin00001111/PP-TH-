@@ -1,6 +1,6 @@
 # PP-TH 协议链路（多国纯 HTTP）
 
-> 更新：2026-08-10  
+> 更新：2026-08-13  
 > 运行时按所选 `country` 绑定协议上下文；本仓库自包含，不依赖外部 job 平台。  
 > 使用 / 排障交流：QQ 群 **`1098798456`**（见 [README.md](./README.md)）。
 
@@ -16,7 +16,9 @@ POST /api/jobs  { ba_token|paypal_url, phone, country, proxy*, buyer_identity_mo
 ```text
 main.py / web.py
   → generate_user / card / address
-       address: OSM online (PAYPAL_ONLINE_ADDRESS) → ADDRESS_POOLS[country] → Faker
+       address: OSM **在线优先** (PAYPAL_ONLINE_ADDRESS 默认开)
+                → ADDRESS_POOLS[country] → Faker
+       其它 PII：本地生成（姓名/电话/卡/证件算法）— 非整包在线身份
   → PayPalFlow.run()
        或 IdentityElevationPayPalFlow.run()   # buyer_identity_mode=elevate_bind
       Phase0: GET /agreements/approve?ba_token=BA-...
@@ -24,7 +26,8 @@ main.py / web.py
       Phase1: 指纹 / Tealeaf / analytics（在 Phase2 之前）
       Phase2: ModXO server-action → onboardingRedirect → EC token / signup URL
       Phase3: Griffin + 2FA 手机确认 + OTP + SignUpNewMember
-              （country=选中国；证件字段按国别，如 BR 可带 CPF）
+              （country=选中国；证件字段按国别，如 BR 可带 CPF；
+                TH/ID/PH/TW/AE 等须 nationality + identityDocument + residentialAddress）
       Phase4: AuthorizeBillingAgreement → return_url / BA id
               · legacy：Hagrid/review 绑定 buyer
               · elevate_bind：
@@ -42,6 +45,11 @@ main.py / web.py
 
 别名（归一到 `elevate_bind`）：`identity_elevation`、`elevate`、`v2`、`guest_bind`、`bind_ec` 等。  
 Web 升权任务类：`WebElevationPayPalFlow`（OTP 适配 + 升权）。
+
+**参考对齐**：`elevate_bind` ≅ 参考包 `paypal-agreement-protocol-main` 的 `identity_elevation`（`elevation_flow.py` + BuyerFunding）。  
+巴西单国 `openai-paypal` **不是**本模式的主参考。
+
+**可测 vs Live**：模式路由/单测/API 归一化可完整测通；Guest elevate 真环境需有效 BA 出 EC 并过 OTP。
 
 ### 1.2 风控引擎（与链路正交）
 

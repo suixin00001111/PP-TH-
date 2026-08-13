@@ -1417,7 +1417,12 @@ class WebPayPalFlow(PayPalFlow):
                         value,
                     ):
                         self._phone_otp_confirmed = True
-                        self._set_stage("短信验证通过，继续注册（不会再要验证码）")
+                        # Re-confirm path (after PHONE_CONFIRMATION_REQUIRED) uses
+                        # the same prompt loop; stage text must stay accurate.
+                        if int(getattr(self, "_phone_reconfirm_attempts", 0) or 0) > 0:
+                            self._set_stage("短信已重新绑定，继续注册（同会话，不重开流程）")
+                        else:
+                            self._set_stage("短信验证通过，继续注册（不会整流程重开）")
                         return
                     logger.warning("验证码验证失败。可以继续输入新的6位验证码，或输入新手机号重新发送验证码。")
                     continue

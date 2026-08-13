@@ -7,7 +7,7 @@
 
 仓库：https://github.com/suixin00001111/PP-TH-
 
-> **文档同步**：2026-08-10（升权模式 · 在线地址 · 44 国地址池 · Web 风控可选手动切换 · 交流群）
+> **文档同步**：2026-08-13（TH/ID/PH/TW/AE/BR KYC harden 已进主仓 · 地址在线 OSM 优先 · 其它资料本地生成 · 44 国地址池 · Web 风控可选）
 
 ### 交流与协作
 
@@ -45,14 +45,25 @@ Protocol context: JP (日本) lang=ja locale=ja_JP phone_cc=+81 runtime=protocol
 `TH JP US GB BR MX ID MY SG PH VN KR HK TW CN AU NZ CA DE FR ES IT NL SE PL PT IE CH AT BE DK NO FI IN AE SA IL TR RU ZA AR CL CO PE`
 
 - 各国：语言 / locale、国际区号、分析时区、地址样式
-- 证件字段按国别规则（如 `BR` 提交 CPF）；其余多数不强制
-- 全部 44 国均有本地 **`ADDRESS_POOLS`** curated 地址（表单安全 ASCII）
+- 证件字段按国别规则；**TH / ID / PH / TW / AE** 提交 `NATIONAL_ID` + `nationality` + `residentialAddress`，**BR** 提交 CPF
+- 其余 38 国不强制证件；全部 44 国均有本地 **`ADDRESS_POOLS`** curated 地址（表单安全 ASCII）
 
 ---
 
 ## 资料与地址
 
-1. **在线 OSM**（Nominatim → Overpass + 本地缓存）— `PAYPAL_ONLINE_ADDRESS=1`（默认开）
+**现在是不是在线获取？** → **地址默认在线**；姓名/手机/卡/证件是**本地生成**，不是整份身份从网上查。
+
+| 资料 | 来源 | 说明 |
+|------|------|------|
+| 账单 / 住宅地址 | **在线优先** | OSM Nominatim → Overpass + 本地缓存（`paypal/online_address.py`） |
+| 姓名 / 邮箱 / 电话 / 卡 / 生日 | 本地 | 国别 profile + Faker，禁止串国 |
+| 证件（如 TH 身份证、BR CPF） | 本地算法 | 按国别 KYC 规则写入 SignUp，非实人核验接口 |
+| 协议 content / hash | 流程内可 live | 部分国家跑 BA 时从 PayPal 页抽取 |
+
+地址解析顺序：
+
+1. **在线 OSM** — `PAYPAL_ONLINE_ADDRESS` 默认开（未设环境变量也视为 `1`）
 2. **本地 `ADDRESS_POOLS`** — 44 国池，失败或关闭在线时使用
 3. **Faker** — 无池时兜底（MIT）；非拉丁脚本经 Unidecode 转写
 
@@ -62,6 +73,7 @@ Protocol context: JP (日本) lang=ja locale=ja_JP phone_cc=+81 runtime=protocol
 $env:PAYPAL_ONLINE_ADDRESS = "0"
 ```
 
+生产日志可见：`Online address resolved for TH: …`（地址已走在线）。  
 姓名等仍按该国 Faker locale；`address.country` 与所选国强制一致。
 
 ---
@@ -85,6 +97,8 @@ Phase0 协议页 → Phase1 指纹/Tealeaf/analytics → Phase2 ModXO/EC
 - 别名：`identity_elevation`、`elevate`、`v2`、`guest_bind` 等 → 均归一为 `elevate_bind`
 - 实现：`paypal/elevation_flow.py` → `IdentityElevationPayPalFlow`  
   Web 升权任务用 `WebElevationPayPalFlow`
+- **参考**：升权链路对齐 `paypal-agreement-protocol-main` 的 `identity_elevation`；巴西单国包 `openai-paypal` **不**整包对齐（仅 CPF/BR 资料）
+- **可测范围**：路由 / 别名 / 单测可完整验证；Live 跑到 Guest elevate 需有效 BA + OTP
 
 ### B/C 层
 
@@ -245,7 +259,13 @@ $env:PAYPAL_ONLINE_ADDRESS = "0"
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-关键：`test_buyer_identity_mode`、`test_online_address`、`test_country_profiles_fidelity`、`test_web_helpers`、`test_flow_state_guards`、`test_resolve_outbound_proxy`、`test_ssl_env`。
+关键：`test_th_signup_kyc`、`test_opaque_onboard_failure`、`test_buyer_identity_mode`、`test_online_address`、`test_country_profiles_fidelity`、`test_web_helpers`、`test_flow_state_guards`、`test_resolve_outbound_proxy`、`test_ssl_env`。
+
+```powershell
+$env:PYTHONPATH = "."
+$env:PAYPAL_ONLINE_ADDRESS = "0"
+python -m pytest tests/test_th_signup_kyc.py tests/test_opaque_onboard_failure.py tests/test_flow_state_guards.py tests/test_protocol_profiles.py -q
+```
 
 | 场景 | 预期 |
 |------|------|

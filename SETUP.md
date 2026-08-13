@@ -1,6 +1,6 @@
 # 环境安装与启动
 
-> 更新：2026-08-10 · 与当前 `main` 代码一致
+> 更新：2026-08-13 · 与当前 `main` 代码一致
 
 ## 1. 基础依赖
 
@@ -59,10 +59,11 @@ copy .env.example .env
 ### Web 表单当前能力
 
 - **国家**：44 国可搜索下拉
-- **Buyer 身份**：`原版流程` / `注册后升 Guest、绑 EC 再授权`（`elevate_bind`）
+- **Buyer 身份**：`原版流程`（`legacy`）/ `注册后升 Guest、绑 EC 再授权`（`elevate_bind`，别名 `identity_elevation`）
 - **指纹 / DataDome / MTR**：可选 Headless、纯协议或 Roxy（**不是**锁死只读）
-- **代理**：填写 +「测试代理」
-- **地址**：任务内自动 `OSM → ADDRESS_POOLS`
+- **代理**：填写 +「测试代理」（出口国宜与所选国家一致；不符会被国家筛选清空）
+- **地址**：**默认在线 OSM** → 失败回退 `ADDRESS_POOLS`（`PAYPAL_ONLINE_ADDRESS=0` 可关在线）
+- **其它资料**：姓名/手机/卡/证件本地生成，非在线实人库
 - **OTP**：面板交互；可选 SMSBower
 
 ### API

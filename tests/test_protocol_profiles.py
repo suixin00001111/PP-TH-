@@ -26,10 +26,17 @@ class ProtocolProfileTests(unittest.TestCase):
         self.assertEqual(addr.country, "BR")
         self.assertTrue(get_region("BR").send_identity_document)
 
-    def test_th_no_identity(self):
-        self.assertFalse(get_region("TH").send_identity_document)
+    def test_th_requires_national_id(self):
+        # Aligned with paypal-agreement-protocol-main: TH signup needs
+        # nationality + NATIONAL_ID (13-digit checksum).
+        self.assertTrue(get_region("TH").send_identity_document)
+        self.assertEqual(get_region("TH").identity_type, "NATIONAL_ID")
         user = generate_user(phone="+66812345678", country="TH")
         self.assertEqual(user.cpf, "")
+        self.assertEqual(user.nationality, "TH")
+        self.assertEqual(user.identity_document_type, "NATIONAL_ID")
+        self.assertEqual(len(user.identity_document_number), 13)
+        self.assertTrue(user.identity_document_number.isdigit())
 
     def test_jp_us_locale(self):
         self.assertEqual(get_region("JP").locale_tag, "ja_JP")
